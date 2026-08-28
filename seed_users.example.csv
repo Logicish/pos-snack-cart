@@ -1,0 +1,15 @@
+# Copy this file to the SD card's root as /seed_users.csv (real filename the firmware
+# looks for — see users_import_from_sd() in src/users.cpp) and fill in real people.
+# NOT read from here — this example lives in source control purely as a format
+# reference. The actual /seed_users.csv on the SD card should NOT be committed to git
+# (it will contain real names and badge numbers).
+#
+# Format: badge,first,last,admin
+#   - badge: the employee ID / badge barcode value, exactly as the GM65 will scan it
+#   - admin: 1 or 0 (or omit the field entirely — defaults to 0)
+#   - blank lines and lines starting with '#' are ignored
+#
+# Already-enrolled badges are skipped on re-import, so it's safe to leave this file on
+# the card permanently and just add a line + reboot to onboard someone new later.
+12345,Jane,Doe,0
+23456,John,Smith,1
