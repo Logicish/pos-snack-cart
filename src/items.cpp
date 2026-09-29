@@ -22,34 +22,9 @@ static void log_prepare_fail(const char *fn) {
     Serial.printf("[ITEMS] %s: query prepare failed: %s\n", fn, sqlite3_errmsg(db_handle()));
 }
 
-// Inserts one starter-catalog row, ignoring it if a row with that name already exists.
-static void seed(const char *name, int price_cents, int stocked) {
-    if (!db_handle()) return;
-
-    sqlite3_stmt *stmt;
-    const char *sql = "INSERT OR IGNORE INTO items (name, price_cents, stocked) VALUES (?, ?, ?);";
-    if (sqlite3_prepare_v2(db_handle(), sql, -1, &stmt, nullptr) != SQLITE_OK) return;
-    sqlite3_bind_text(stmt, 1, name, -1, SQLITE_STATIC);
-    sqlite3_bind_int(stmt, 2, price_cents);
-    sqlite3_bind_int(stmt, 3, stocked);
-    sqlite3_step(stmt);
-    sqlite3_finalize(stmt);
-}
-
-// Seeds a small hardcoded starter catalog the first time the items table is empty --
-// no-op on every later boot once real items exist.
-void items_init() {
-    if (items_count() > 0) return;  // already seeded (or DB unavailable) — don't duplicate
-
-    seed("Chips",        150, 20);
-    seed("Candy Bar",    125, 20);
-    seed("Soda",         150, 20);
-    seed("Water",        100, 20);
-    seed("Granola Bar",  125, 20);
-    seed("Gum",           75, 20);
-    seed("Cookies",      175, 20);
-    seed("Energy Drink", 250, 20);
-}
+// items_init()'s hardcoded 8-item starter catalog (Chips/Soda/etc.) removed 2026-09-29 --
+// useful for early testing, but a blank card set up in the field would have shown fake
+// items for sale. A fresh DB now starts with an empty catalog; the admin adds real items.
 
 // Returns the total number of rows in the items table (or just the visible ones -- see items.h).
 int items_count(bool include_hidden) {

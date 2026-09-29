@@ -68,3 +68,10 @@ bool users_has_admin();
 // identity before the web portal is even reachable). -1 = no admin session yet this boot.
 void users_set_current_admin(int user_id);  // called when a known admin badge routes into the Admin Menu
 int  users_get_current_admin();             // -1 if no admin has scanned in yet this boot
+
+// Self-service auto-enrollment toggle (2026-09-29, owner request) -- when on, an unknown
+// badge scanned at IDLE opens the enroll name wheel instead of the "see an admin" screen.
+// Persisted in config as "auto_enroll" ("1"/"0"), default OFF so a fresh card behaves
+// exactly like the admin-only enrollment it had before. Toggled from Admin -> Users.
+bool users_auto_enroll_enabled();
+void users_set_auto_enroll(bool enabled);

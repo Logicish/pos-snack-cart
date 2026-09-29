@@ -1,6 +1,7 @@
 #include "screen_user_menu.h"
 #include "screen_edit_users.h"
 #include "screens.h"
+#include "users.h"
 #include "header.h"
 #include "theme.h"
 #include "buttons.h"
@@ -14,18 +15,27 @@
   Function- Implements the Users submenu declared in screen_user_menu.h.
 */
 
-#define MENU_COUNT 2
+#define MENU_COUNT 3
+#define ROW_AUTO_ENROLL 2
 #define FOOTER_H   52
 
 static lv_obj_t *_scr;
 static lv_obj_t *_rows[MENU_COUNT];
+static lv_obj_t *_labels[MENU_COUNT];
 static int        _cursor;
 static int        _prev_cursor = -1;
 
 static const char *MENU_LABELS[MENU_COUNT] = {
     "1. Add User",
     "2. Edit Users",
+    "",  // Auto Enroll -- text depends on the saved toggle, see refresh_auto_enroll_label()
 };
+
+// Rewrites the Auto Enroll row's text to show the current saved state.
+static void refresh_auto_enroll_label() {
+    lv_label_set_text(_labels[ROW_AUTO_ENROLL],
+                      users_auto_enroll_enabled() ? "3. Auto Enroll: ON" : "3. Auto Enroll: OFF");
+}
 
 // Highlights the currently-selected row.
 static void refresh_cursor() {
@@ -59,6 +69,11 @@ static void cb_enter() {
     switch (_cursor) {
         case 0: screen_add_user_push();  break;
         case 1: screen_edit_users_push(); break;
+        // Toggles in place -- reversible, so no confirm (see feedback-lightweight-confirm-pattern).
+        case ROW_AUTO_ENROLL:
+            users_set_auto_enroll(!users_auto_enroll_enabled());
+            refresh_auto_enroll_label();
+            break;
     }
 }
 
@@ -96,6 +111,7 @@ void screen_user_menu_push() {
             lv_label_set_text(lbl, MENU_LABELS[i]);
             lv_obj_set_style_text_color(lbl, lv_color_hex(C_TEXT), LV_PART_MAIN);
             lv_obj_set_style_text_font(lbl, &lv_font_montserrat_20, LV_PART_MAIN);
+            _labels[i] = lbl;
         }
 
         lv_obj_t *legend = ui_legend(_scr);
@@ -104,11 +120,12 @@ void screen_user_menu_push() {
         char move_lbl[24];
         snprintf(move_lbl, sizeof(move_lbl), "%s%s Move", LV_SYMBOL_UP, LV_SYMBOL_DOWN);
         ui_legend_row(legend, "", lv_color_hex(C_TEXT), move_lbl, lv_color_hex(C_YELLOW));
-        ui_legend_row(legend, "Open", lv_color_hex(C_GREEN), "Back", lv_color_hex(C_RED));
+        ui_legend_row(legend, "Select", lv_color_hex(C_GREEN), "Back", lv_color_hex(C_RED));
     }
 
     header_set_visible(true);
     header_set_title("USERS");
+    refresh_auto_enroll_label();
     refresh_cursor();
 
     ButtonHandlers h;

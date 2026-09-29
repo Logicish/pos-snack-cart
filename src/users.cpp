@@ -219,3 +219,15 @@ bool users_has_admin() {
     }
     return found;
 }
+
+// Reads the auto-enroll toggle straight from config each call -- only ever hit on an
+// unknown-badge scan or the Users menu, so there's nothing worth caching.
+bool users_auto_enroll_enabled() {
+    char buf[4];
+    return db_config_get("auto_enroll", buf, sizeof(buf)) && buf[0] == '1';
+}
+
+// Persists the auto-enroll toggle.
+void users_set_auto_enroll(bool enabled) {
+    db_config_set("auto_enroll", enabled ? "1" : "0");
+}

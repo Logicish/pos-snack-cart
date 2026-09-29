@@ -37,7 +37,6 @@ struct Item {
     bool hidden;
 };
 
-void items_init();  // seeds a small hardcoded starter catalog if the table is empty
 // Total row count in the items table. include_hidden=false counts only visible items --
 // pass that from any customer-facing/checkout-time list (Browse, POS Manual Entry); leave
 // it true (default) for admin catalog-management lists (Inventory, Add/Attach's picker),

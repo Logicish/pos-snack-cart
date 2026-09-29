@@ -198,6 +198,14 @@ static void on_scan(const char *badge_id) {
         // 2026-08-25: used to self-enroll here (screen_enroll_push(badge_id)) — removed per
         // the owner's explicit "no guest checkout, all users manually enrolled by an admin"
         // call. See Add User (Admin Menu) for the replacement admin-gated enrollment path.
+        // 2026-09-29: brought back behind an admin toggle (Admin -> Users -> Auto Enroll,
+        // default OFF) at the owner's request. Same name wheel + re-scan-to-confirm as Add
+        // User, so the badge number is still verified by a second scan before saving.
+        if (users_auto_enroll_enabled()) {
+            Serial.printf("[SCAN] Unknown badge: %s — auto-enroll\n", badge_id);
+            screen_enroll_push_self(badge_id);
+            return;
+        }
         Serial.printf("[SCAN] Unknown badge: %s — not enrolled\n", badge_id);
         screen_blocked_push("Badge not recognized.\n\nPlease see an admin to\nget enrolled.");
     }
@@ -233,7 +241,6 @@ bool boot_try_init_db() {
     bool sd_write_ok = sd_write_read_test();
     Serial.printf("[SD] write/read test: %s\n", sd_write_ok ? "OK" : "FAILED");
     system_alerts_set_sd_write_result(sd_write_ok);
-    items_init();
     db_backup_now();  // fresh baseline every boot -- cheap (this device's DB stays small),
                        // and guarantees a first backup exists even before any checkout ever runs
     system_alerts_refresh();  // picks up SD/DB status computed above, for the Admin Menu banner
@@ -306,6 +313,27 @@ void setup() {
                                         // confirmed via a real register readback, not a guess
     delay(30);
 
+    // 2026-09-29 — actively drain those three ACKs here, same drain-til-quiet pattern as
+    // buttons.cpp's drain_scanner_ack(). Before this, the setup wizard relied on loop()'s
+    // blanket "ignore scans while this screen is up" guard to dodge them -- which also
+    // ignored every REAL badge scan, so a blank-card setup could never get past its first
+    // prompt (caught on real hardware). Splash/SD-error keep their loop() guards (neither
+    // wants scans anyway); the wizard no longer needs one.
+    {
+        uint32_t start = millis(), last_rx = 0;
+        bool saw_any = false;
+        while (millis() - start < 500) {        // fault-guard if the module never answers
+            if (scanner.available()) {
+                while (scanner.available()) scanner.read();
+                last_rx = millis();
+                saw_any = true;
+            } else if (saw_any && millis() - last_rx >= 40) {
+                break;                          // replies received, bus quiet since
+            }
+            delay(1);
+        }
+    }
+
     // Reconciles the scanner's real state (just forced to Induction/sensing, above)
     // against whatever screen buttons_set_handlers() was called for earlier in setup()
     // (splash, the setup wizard, or the SD/DB error screen, depending on boot outcome)
@@ -342,14 +370,13 @@ void loop() {
                 // right after either one loads, so without this a stray ACK got read as an
                 // "unknown badge," which then routed through screen_blocked -> screen_idle_load()
                 // and escaped the error screen entirely (caught on real hardware 2026-09-14).
-                // The setup wizard needs the identical guard for the identical reason -- it
-                // also runs instead of splash (when the DB has no admin) and actively wants
-                // real scans, so an unguarded ACK here wouldn't just be misrouted, it'd get
-                // fed straight into the wizard's own badge-scan handling as if it were real.
+                // The setup wizard USED to be guarded here too (2026-09-14), but that also
+                // swallowed its real badge scans -- removed 2026-09-29; setup() now drains
+                // the boot ACKs synchronously instead, see there.
                 // Still drain the UART either way so bytes don't pile up.
                 if (screen_screensaver_is_active() || screen_splash_is_active() ||
-                    screen_sd_error_is_active() || screen_setup_wizard_is_active()) {
-                    Serial.printf("SCAN: [%s] — ignored, splash/screensaver/error/setup screen active\n", code.c_str());
+                    screen_sd_error_is_active()) {
+                    Serial.printf("SCAN: [%s] — ignored, splash/screensaver/error screen active\n", code.c_str());
                 } else {
                     Serial.printf("SCAN: [%s]\n", code.c_str());
                     on_scan(code.c_str());

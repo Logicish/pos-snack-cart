@@ -147,7 +147,12 @@ bool db_init() {
                                            // risking), just no longer read or written by new code
         "  name        TEXT    NOT NULL,"
         "  price_cents INTEGER NOT NULL,"
-        "  stocked     INTEGER NOT NULL DEFAULT 0"
+        "  stocked     INTEGER NOT NULL DEFAULT 0,"
+        // hidden is in CREATE TABLE as of 2026-09-29 -- a blank-card setup-wizard test
+        // produced a fresh pos.db WITHOUT it: the guarded ALTER below failed silently on a
+        // brand-new table, same as every other ALTER on this build. Fresh DBs no longer
+        // depend on ALTER at all; the ALTER below stays only for pre-09-14 DBs.
+        "  hidden      INTEGER NOT NULL DEFAULT 0"
         ");"
     );
 

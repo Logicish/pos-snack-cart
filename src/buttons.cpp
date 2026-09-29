@@ -207,10 +207,20 @@ void buttons_poll() {
                 session_timer_reset();
                 ButtonCb cb = handler_for(i);
                 if (cb) cb();
+                // 2026-09-29 — restart the hold clock AFTER the callback. A slow screen
+                // build (e.g. Transaction's Item Lookup list) used to count toward the
+                // repeat delay, so a normal tap fired a phantom repeat into the NEW
+                // screen's handler (Right -> open Lookup -> Page Down).
+                // `now` must move forward with it -- leaving it stale made
+                // `now - pressedAtMs` underflow (uint32) and fire a repeat instantly.
+                now = millis();
+                b.pressedAtMs = now;
             }
         }
 
-        if (b.pressed && b.repeats) {
+        // stableRaw, not just pressed: `pressed` lags a release by DEBOUNCE_MS, which let
+        // a repeat fire after the finger was already off the button.
+        if (b.pressed && b.stableRaw && b.repeats) {
             if (!b.repeating && now - b.pressedAtMs >= b.repeatDelayMs) {
                 b.repeating   = true;
                 b.nextRepeatMs = now;

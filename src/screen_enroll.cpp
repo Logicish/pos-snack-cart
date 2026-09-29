@@ -1,6 +1,7 @@
 #include "screen_enroll.h"
 #include "screens.h"
 #include "screen_add_user.h"
+#include "screen_pos.h"
 #include "header.h"
 #include "theme.h"
 #include "users.h"
@@ -15,7 +16,12 @@
   Date----- September 2026
   Function- Implements the enrollment widget declared in screen_enroll.h -- four
             states: ST_FIRST/ST_LAST (name wheel), ST_CONFIRM (name summary),
-            ST_SCAN (re-scan to confirm the badge before saving).
+            ST_SCAN (re-scan to confirm the badge before saving), plus ST_ASK
+            ("Badge not found. Enroll new user?") ahead of the wheel in auto-enroll only.
+  Notes---- Two entry points, 2026-09-29: screen_enroll_push() (admin's Add User --
+            returns to Add User on success) and screen_enroll_push_self() (auto-enroll --
+            an unknown badge at IDLE with the toggle on; drops the new user straight into
+            their own transaction on success, like the original 2026-08-24 self-enrollment).
 */
 
 // ── character set ─────────────────────────────────────────────────────────────
@@ -27,13 +33,14 @@ static const char CHARSET[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ -";
 #define IDX_A       0
 
 // ── state ─────────────────────────────────────────────────────────────────────
-typedef enum { ST_FIRST, ST_LAST, ST_CONFIRM, ST_SCAN } EnrollState;
+typedef enum { ST_ASK, ST_FIRST, ST_LAST, ST_CONFIRM, ST_SCAN } EnrollState;
 
 static char        _badge_id[48];
 static int8_t      _idx[2][NAME_LEN];
 static uint8_t     _cursor;
 static uint8_t     _active_row;
 static EnrollState _state;
+static bool        _self;  // true = self-service auto-enroll, false = admin Add User
 
 // ── LVGL handles ──────────────────────────────────────────────────────────────
 static lv_obj_t *_scr;
@@ -100,6 +107,7 @@ static void refresh_cells() {
 static void build_input_ui();
 static void build_confirm_ui();
 static void build_scan_ui();
+static void build_ask_ui();
 
 // ── button callbacks ──────────────────────────────────────────────────────────
 
@@ -192,6 +200,18 @@ static void cb_no() {
     build_input_ui();
 }
 
+// Enter on ST_ASK: yes, this is a new person -- open the name wheel.
+static void cb_ask_yes() {
+    _state = ST_FIRST;
+    lv_obj_clean(_content);
+    build_input_ui();
+}
+
+// Back on ST_ASK: probably a misread -- back to the Start screen, nothing created.
+static void cb_ask_no() {
+    screen_idle_load();
+}
+
 // ── UI builders ───────────────────────────────────────────────────────────────
 
 // Builds one "Enter First/Last Name:" hint label.
@@ -237,6 +257,11 @@ static void build_char_row(lv_obj_t *parent, uint8_t row) {
 
 // Builds the ST_FIRST/ST_LAST (name wheel) UI.
 static void build_input_ui() {
+    if (_self) {
+        lv_obj_t *intro = make_section_label(_content, "New badge! Enter your name to sign up.");
+        lv_label_set_long_mode(intro, LV_LABEL_LONG_WRAP);
+        lv_obj_set_style_text_color(intro, lv_color_hex(C_CYAN), LV_PART_MAIN);
+    }
     make_section_label(_content, "Enter First Name:");
     build_char_row(_content, 0);
 
@@ -287,7 +312,7 @@ static void build_confirm_ui() {
     snprintf(full, sizeof(full), "%s %s", first, last);
 
     lv_obj_t *prompt = lv_label_create(_content);
-    lv_label_set_text(prompt, "Add this person?");
+    lv_label_set_text(prompt, _self ? "Is this your name?" : "Add this person?");
     lv_obj_set_style_text_color(prompt, lv_color_hex(C_TEXT), LV_PART_MAIN);
     lv_obj_set_style_text_font(prompt, &lv_font_montserrat_20, LV_PART_MAIN);
     lv_obj_set_width(prompt, LV_PCT(100));
@@ -313,6 +338,40 @@ static void build_confirm_ui() {
     ButtonHandlers h;
     h.enter = cb_yes;
     h.back  = cb_no;
+    buttons_set_handlers(h);
+}
+
+// Builds the ST_ASK UI -- auto-enroll only. An unrecognized badge might just be a
+// misread of a known one, so ask before dropping anyone into the name wheel.
+static void build_ask_ui() {
+    lv_obj_t *prompt = lv_label_create(_content);
+    lv_label_set_text(prompt, "Badge not found.\n\nEnroll new user?");
+    lv_label_set_long_mode(prompt, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_color(prompt, lv_color_hex(C_TEXT), LV_PART_MAIN);
+    lv_obj_set_style_text_font(prompt, &lv_font_montserrat_20, LV_PART_MAIN);
+    lv_obj_set_width(prompt, LV_PCT(100));
+    lv_obj_set_style_text_align(prompt, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+
+    lv_obj_t *hint = lv_label_create(_content);
+    lv_label_set_text(hint, "If you're already signed up,\npress No and scan again.");
+    lv_label_set_long_mode(hint, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_color(hint, lv_color_hex(C_TEXT), LV_PART_MAIN);
+    lv_obj_set_style_text_font(hint, &lv_font_montserrat_16, LV_PART_MAIN);
+    lv_obj_set_width(hint, LV_PCT(100));
+    lv_obj_set_style_text_align(hint, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+
+    lv_obj_t *grow = lv_obj_create(_content);
+    lv_obj_set_size(grow, LV_PCT(100), 1);
+    lv_obj_set_style_bg_opa(grow, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_border_width(grow, 0, LV_PART_MAIN);
+    lv_obj_set_flex_grow(grow, 1);
+
+    lv_obj_t *legend = ui_legend(_content);
+    ui_legend_row(legend, "Yes", lv_color_hex(C_GREEN), "No", lv_color_hex(C_RED));
+
+    ButtonHandlers h;
+    h.enter = cb_ask_yes;
+    h.back  = cb_ask_no;
     buttons_set_handlers(h);
 }
 
@@ -372,7 +431,13 @@ bool screen_enroll_on_scan(const char *badge_id) {
         // checkout, admin-only enrollment" call) -- the only caller of this flow is an admin
         // enrolling someone else via Add User, so this should return the admin to that scan
         // prompt (ready for the next new person), not leave them sitting in a stranger's cart.
-        screen_add_user_push();
+        if (_self) {
+            // Self-service: continue straight into the new user's own transaction.
+            header_set_current_user(first);
+            screen_pos_push(user_id);
+        } else {
+            screen_add_user_push();
+        }
     } else {
         Serial.printf("[ENROLL] Badge mismatch during confirm scan\n");
         if (_scan_status_lbl) lv_label_set_text(_scan_status_lbl, "Wrong badge - try again");
@@ -380,8 +445,24 @@ bool screen_enroll_on_scan(const char *badge_id) {
     return true;
 }
 
-// Loads the enrollment widget for the given (already-confirmed-unenrolled) badge.
+static void enroll_load(const char *badge_id);
+
+// Admin Add User entry -- see Notes at the top of this file.
 void screen_enroll_push(const char *badge_id) {
+    _self = false;
+    enroll_load(badge_id);
+}
+
+// Auto-enroll entry (unknown badge at IDLE, toggle on) -- see Notes at the top of this file.
+void screen_enroll_push_self(const char *badge_id) {
+    _self = true;
+    header_set_visible(true);
+    header_set_title("SIGN UP");
+    enroll_load(badge_id);
+}
+
+// Loads the enrollment widget for the given (already-confirmed-unenrolled) badge.
+static void enroll_load(const char *badge_id) {
     strncpy(_badge_id, badge_id, sizeof(_badge_id) - 1);
     _badge_id[sizeof(_badge_id) - 1] = '\0';
 
@@ -426,6 +507,11 @@ void screen_enroll_push(const char *badge_id) {
     }
 
     header_set_current_user("");
-    build_input_ui();
+    if (_self) {
+        _state = ST_ASK;  // confirm first -- see build_ask_ui()
+        build_ask_ui();
+    } else {
+        build_input_ui();
+    }
     lv_scr_load(_scr);
 }

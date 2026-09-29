@@ -124,7 +124,6 @@ static void refresh_report() {
 static void cb_retry() {
     if (!db_handle()) {
         db_init();
-        items_init();
     }
     system_alerts_refresh();  // reflects any change in DB/SD status on the Admin Menu banner
     refresh_report();

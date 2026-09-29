@@ -13,6 +13,7 @@
 #include "header.h"
 #include "theme.h"
 #include "users.h"
+#include "db.h"
 #include "buttons.h"
 #include "session_timer.h"
 #include "ui.h"
@@ -466,6 +467,11 @@ bool screen_setup_wizard_on_scan(const char *badge_id) {
             }
             Serial.printf("[SETUP] Created admin %d: %s %s\n", user_id, first, last);
             _created_count++;
+            // 2026-09-29 -- back up right away. The only automatic backups are at boot and
+            // after a checkout, so the boot-time backup of a fresh card has zero users; a
+            // restore before the first sale would have dropped this admin and landed back
+            // in this wizard. Runs once per admin created, so each one is covered.
+            if (!db_backup_now()) Serial.println("[SETUP] backup after admin create FAILED");
             _state = ST_SCAN;
             clear_content();
             build_scan_ui();
