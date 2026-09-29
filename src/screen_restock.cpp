@@ -9,13 +9,22 @@
 #include "ui.h"
 #include <lvgl.h>
 
+/*
+  Author--- LogicishDesigns
+  Date----- September 2026
+  Function- Implements the Restock scan prompt declared in screen_restock.h.
+*/
+
 static lv_obj_t *_scr;
 static lv_obj_t *_lbl;
 
+// Back returns to the Inventory submenu.
 static void cb_back() {
     screen_inventory_menu_push();  // 2026-08-28 reorg -- was screen_menu_push()
 }
 
+// Consumes a scan while this screen is active -- opens Item Edit for a known UPC,
+// otherwise tells the admin to use Add/Attach Item first.
 bool screen_restock_on_scan(const char *upc) {
     if (!_scr || lv_scr_act() != _scr) return false;
 
@@ -33,6 +42,7 @@ bool screen_restock_on_scan(const char *upc) {
     return true;
 }
 
+// Loads the Restock scan prompt.
 void screen_restock_push() {
     if (!_scr) {
         _scr = lv_obj_create(nullptr);
@@ -57,6 +67,7 @@ void screen_restock_push() {
 
     ButtonHandlers h;
     h.back = cb_back;
+    h.wantsScanner = true;  // waiting for an item UPC to restock
     buttons_set_handlers(h);
 
     lv_scr_load(_scr);

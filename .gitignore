@@ -4,11 +4,6 @@
 .vscode/launch.json
 .vscode/ipch
 
-# Real names/badge numbers for SD-card bulk enrollment — see seed_users.example.csv
-# for the format. This file is meant to live only on the SD card; if it's ever staged
-# here for convenience, don't let it get committed.
-seed_users.csv
-
 # 2026-08-28 — repo scope narrowed to source only, per explicit direction: "i just want
 # the source saved. since that will be the longest to rebuild if something happened to it."
 # (.gitignore comments must be on their own line -- a trailing "pattern # comment" is

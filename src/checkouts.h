@@ -1,9 +1,15 @@
 #pragma once
 
-// One row per checkout ("Finish" → Payment "Complete + Logout"), NOT per item scan —
-// see snack_cart_pos.md's DB schema section for why. A cancelled/logged-out transaction
-// never reaches this module at all — the cart only exists in RAM until checkout_save()
-// commits it.
+/*
+  Author--- LogicishDesigns
+  Date----- September 2026
+  Function- Checkout (transaction) records -- saving a completed cart, listing
+            outstanding (unpaid) balances, and clearing them once Venmo lands.
+  Notes---- One row per checkout ("Finish" → Payment "Complete + Logout"), NOT per
+            item scan — see snack_cart_pos.md's DB schema section for why. A
+            cancelled/logged-out transaction never reaches this module at all — the
+            cart only exists in RAM until checkout_save() commits it.
+*/
 
 struct CheckoutLine {
     int item_id;
@@ -25,12 +31,16 @@ struct OutstandingCheckout {
     int  id;                 // checkouts.id -- the same number the Venmo note carries
     int  user_id;
     int  total_price_cents;
-    long created_at;         // 0 = never set (no RTC/NTP yet) -- see checkouts.cpp
+    long created_at;         // 0 = never set -- see checkouts.cpp
 };
 
 // Fills out[] with up to `max` uncleared checkouts, oldest first. Returns how many were
 // written.
 int checkouts_get_outstanding(OutstandingCheckout *out, int max);
+
+// Same as above, filtered to one user's own uncleared checkouts -- Extras' Check Balance
+// screen only ever shows the badge-scanned-in user's own balance, never anyone else's.
+int checkouts_get_outstanding_for_user(int user_id, OutstandingCheckout *out, int max);
 
 // Marks one checkout cleared (cleared_at = now). Returns false if it doesn't exist or was
 // already cleared -- never deletes the row, same reasoning as checkouts.cleared_at's

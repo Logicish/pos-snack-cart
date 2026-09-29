@@ -1,30 +1,47 @@
 #include "screen_settings.h"
-#include "screen_venmo_settings.h"
+#include "screen_payment_menu.h"
+#include "screen_screensaver_menu.h"
 #include "screen_set_clock.h"
+#include "screen_display_menu.h"
+#include "screen_security_menu.h"
 #include "screens.h"
 #include "header.h"
 #include "theme.h"
 #include "buttons.h"
-#include "idle_timer.h"
 #include "ui.h"
 #include <lvgl.h>
 #include <Arduino.h>
 
-#define MENU_COUNT 3
+/*
+  Author--- LogicishDesigns
+  Date----- September 2026
+  Function- Implements the Settings submenu declared in screen_settings.h.
+*/
+
+#define MENU_COUNT 5
 #define FOOTER_H   52
 
 static lv_obj_t *_scr;
 static lv_obj_t *_rows[MENU_COUNT];
-static lv_obj_t *_row_lbls[MENU_COUNT];  // row 0 (screensaver timeout) is dynamic
 static int        _cursor;
 static int        _prev_cursor = -1;
 
+// Reordered 2026-09-14 (Payment Info, Screensaver, Clock) per explicit direction, then
+// grew two more sections the same day. Row 0 ("Venmo Payment Info" until 2026-09-14) is
+// now "Payment Info", opening a submenu of payment methods (Venmo/Zelle/Cashapp —
+// screen_payment_menu.cpp). Row 1 ("Screensaver: N min," which used to cycle the timeout
+// directly from this list) is now a static label opening its own submenu
+// (screen_screensaver_menu.cpp). Row 3 "Display" (screen_display_menu.cpp) and row 4
+// "Security" (screen_security_menu.cpp) are new.
 static const char *MENU_LABELS[MENU_COUNT] = {
-    "1. Screensaver: - min",  // overwritten immediately by update_screensaver_row_label()
-    "2. Venmo Payment Info",
+    "1. Payment Info",
+    "2. Screensaver",
     "3. Set Clock",
+    "4. Display",
+    "5. Security",
 };
 
+// Highlights the currently-selected row.
 static void refresh_cursor() {
     if (_prev_cursor >= 0 && _prev_cursor != _cursor) {
         lv_obj_set_style_bg_opa(_rows[_prev_cursor], LV_OPA_TRANSP, LV_PART_MAIN);
@@ -34,43 +51,35 @@ static void refresh_cursor() {
     lv_obj_scroll_to_view(_rows[_cursor], LV_ANIM_OFF);
 }
 
+// Up: moves the selection up one row, wrapping.
 static void cb_up() {
     _cursor = (_cursor - 1 + MENU_COUNT) % MENU_COUNT;
     refresh_cursor();
 }
 
+// Down: moves the selection down one row, wrapping.
 static void cb_down() {
     _cursor = (_cursor + 1) % MENU_COUNT;
     refresh_cursor();
 }
 
+// Back returns to the main Admin Menu.
 static void cb_back() {
     screen_menu_push();  // up one level to the main Admin Menu, not a full logout
 }
 
-// 2026-08-26 — replaced the old "jump to preview the screensaver" action. With a
-// configurable 1-10 minute timeout (down from a fixed 30s), just setting it to 1 minute
-// gets a real preview fast enough that the instant-jump shortcut wasn't worth keeping.
-// Moved here from Advanced Tools 2026-08-28 (Admin Menu reorg) — unchanged logic.
-static void update_screensaver_row_label() {
-    char buf[32];
-    snprintf(buf, sizeof(buf), "1. Screensaver: %d min", idle_timer_get_minutes());
-    lv_label_set_text(_row_lbls[0], buf);
-}
-
-static void act_cycle_screensaver_timeout() {
-    idle_timer_set_minutes(idle_timer_get_minutes() + 1);  // wraps 10 -> 1 in idle_timer.cpp
-    update_screensaver_row_label();
-}
-
+// Enter opens whichever submenu/screen the selected row names.
 static void cb_enter() {
     switch (_cursor) {
-        case 0: act_cycle_screensaver_timeout(); break;
-        case 1: screen_venmo_settings_push();    break;
-        case 2: screen_set_clock_push();         break;
+        case 0: screen_payment_menu_push();     break;
+        case 1: screen_screensaver_menu_push(); break;
+        case 2: screen_set_clock_push();        break;
+        case 3: screen_display_menu_push();     break;
+        case 4: screen_security_menu_push();    break;
     }
 }
 
+// Loads the Settings submenu.
 void screen_settings_push() {
     _cursor = 0;
 
@@ -104,7 +113,6 @@ void screen_settings_push() {
             lv_label_set_text(lbl, MENU_LABELS[i]);
             lv_obj_set_style_text_color(lbl, lv_color_hex(C_TEXT), LV_PART_MAIN);
             lv_obj_set_style_text_font(lbl, &lv_font_montserrat_20, LV_PART_MAIN);
-            _row_lbls[i] = lbl;
         }
 
         lv_obj_t *legend = ui_legend(_scr);
@@ -116,7 +124,6 @@ void screen_settings_push() {
         ui_legend_row(legend, "Open", lv_color_hex(C_GREEN), "Back", lv_color_hex(C_RED));
     }
 
-    update_screensaver_row_label();  // reflects the persisted value, not just the built-in default
     header_set_visible(true);
     header_set_title("SETTINGS");
     refresh_cursor();

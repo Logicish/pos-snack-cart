@@ -2,19 +2,65 @@
 #include "db.h"
 #include "users.h"
 #include <Arduino.h>
+
+/*
+  Author--- LogicishDesigns
+  Date----- September 2026
+  Function- The AP-mode WiFi + admin web portal: session/login, and every page
+            (Home/Items/Balance/Report/Users/Admin) as a hand-built HTML string over
+            ESPAsyncWebServer, reading/writing the same SQLite DB the on-device UI
+            uses.
+  Notes---- No client-side JS/framework -- plain forms POST back to their own
+            handler, which redirects back to the page. Every write handler is gated
+            by require_auth(); every read/render handler is open to anyone on the AP
+            (the AP password is the portal's first real gate).
+*/
 #include <WiFi.h>
 #include <SD.h>
 #include <ESPAsyncWebServer.h>
 #include <sqlite3.h>
 #include <time.h>
 #include <esp_random.h>
+#include <string.h>
 
-// TEMPORARY — no login screen yet, this AP password is the only thing keeping a
-// stranger off the admin page. Change before this ever leaves the workbench.
-#define AP_SSID     "SnackCart"
-#define AP_PASSWORD "snackcart123"
+#define AP_SSID             "SnackCart"
+// 2026-09-14 — the AP password moved from this fixed #define to the config table, editable
+// on-device from Settings -> Security (screen_wifi_password.cpp), same as every other
+// config-backed setting in this codebase. This stays as the fallback default for a fresh
+// DB / before anything's ever been saved -- WPA2-PSK requires 8-63 ASCII chars, so anything
+// shorter saved to config is treated as unset (see get_ap_password() below).
+#define AP_PASSWORD_DEFAULT "snackcart123"
+#define AP_PASSWORD_CONFIG_KEY "ap_password"
+
+// Admin web-portal login password -- single shared plaintext value, 2026-09-14, replacing
+// a per-admin salted-SHA-256 scheme (see users.h). This device's AP is off most of the
+// time and local-range-only, so a real per-account threat model was never justified here.
+// Same config-backed/fallback-default pattern as the AP password above.
+#define ADMIN_PASSWORD_DEFAULT "logicish"
+#define ADMIN_PASSWORD_CONFIG_KEY "admin_password"
 
 static AsyncWebServer _server(80);
+
+// Shared by get_ap_password()/get_admin_password() below -- same config-backed/fallback-
+// default pattern, differing only in which key/default/minimum length applies. Each caller
+// gets its own static buffer (passed in) so the two passwords never alias each other.
+static const char *get_config_password(const char *key, const char *fallback, size_t min_len,
+                                        char *buf, size_t buf_len) {
+    if (db_handle() && db_config_get(key, buf, buf_len) && strlen(buf) >= min_len) {
+        return buf;
+    }
+    return fallback;
+}
+
+static const char *get_ap_password() {
+    static char buf[32];
+    return get_config_password(AP_PASSWORD_CONFIG_KEY, AP_PASSWORD_DEFAULT, 8, buf, sizeof(buf));
+}
+
+static const char *get_admin_password() {
+    static char buf[32];
+    return get_config_password(ADMIN_PASSWORD_CONFIG_KEY, ADMIN_PASSWORD_DEFAULT, 1, buf, sizeof(buf));
+}
 
 // ── sessions (2026-08-25) ───────────────────────────────────────────────────
 // Small in-memory table -- this device has 2-3 admin accounts, not thousands of users, so
@@ -34,6 +80,7 @@ struct Session {
 };
 static Session _sessions[MAX_SESSIONS];
 
+// Fills out[] with a random hex session token.
 static void make_session_token(char *out) {
     static const char hexchars[] = "0123456789abcdef";
     for (int i = 0; i < SESSION_TOKEN_HEX_LEN / 2; i++) {
@@ -46,6 +93,7 @@ static void make_session_token(char *out) {
 
 // Reuses the oldest slot if the (tiny) table is full rather than failing -- acceptable at
 // this scale, just means the least-recently-created session gets logged out.
+// Creates (or reuses the oldest slot for) a new login session, returns its slot index.
 static int create_session(int user_id) {
     int slot = 0;
     for (int i = 0; i < MAX_SESSIONS; i++) {
@@ -57,6 +105,7 @@ static int create_session(int user_id) {
     return slot;
 }
 
+// Finds the session slot matching this request's cookie, or -1 if none/invalid.
 static int find_session_slot(AsyncWebServerRequest *request) {
     if (!request->hasHeader("Cookie")) return -1;
     String cookie = request->header("Cookie");
@@ -80,12 +129,14 @@ static bool require_auth(AsyncWebServerRequest *request, int *out_user_id = null
     return true;
 }
 
+// Sends a redirect response to the login page.
 static void redirect_to_login(AsyncWebServerRequest *request) {
     request->redirect("/login");
 }
 
 // ── shared helpers ──────────────────────────────────────────────────────────
 
+// Escapes &/</>/" for safe embedding in HTML.
 static String html_escape(const String &s) {
     String out = s;
     out.replace("&", "&amp;");
@@ -95,6 +146,7 @@ static String html_escape(const String &s) {
     return out;
 }
 
+// Formats an integer cents value as "$X.XX".
 static String format_cents(int cents) {
     char buf[16];
     snprintf(buf, sizeof(buf), "$%.2f", cents / 100.0);
@@ -113,6 +165,7 @@ static String format_epoch(long epoch) {
     return String(buf);
 }
 
+// Formats millis()-since-boot as "XhYm".
 static String format_uptime() {
     unsigned long s = millis() / 1000;
     unsigned long h = s / 3600;
@@ -160,6 +213,7 @@ static const NavTab NAV_TABS[] = {
     {"Admin",   "/admin"},
 };
 
+// Renders the top navbar, highlighting whichever tab is "active".
 static String render_nav(const char *active) {
     String html = "<nav class='navbar'>";
     for (const NavTab &t : NAV_TABS) {
@@ -172,6 +226,7 @@ static String render_nav(const char *active) {
     return html;
 }
 
+// Wraps a page body in the shared HTML shell (doctype/CSS/navbar).
 static String render_page(const String &title, const char *active, const String &body) {
     String html;
     html += "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width, initial-scale=1'>";
@@ -185,6 +240,7 @@ static String render_page(const String &title, const char *active, const String 
 // ── Login / Logout / Change Password ────────────────────────────────────────
 // Not in NAV_TABS -- reached by redirect from a gated action, or by visiting /login directly.
 
+// Renders the /login page -- identity comes from users_get_current_admin(), just asks for the password.
 static String render_login_page(const char *error) {
     int admin_id = users_get_current_admin();
     if (admin_id < 0) {
@@ -205,10 +261,12 @@ static String render_login_page(const char *error) {
     return render_page("Login", "Admin", html);
 }
 
+// GET /login -- shows the login form.
 static void handle_login(AsyncWebServerRequest *request) {
     request->send(200, "text/html", render_login_page(nullptr));
 }
 
+// POST /login -- checks the shared admin password and creates a session on success.
 static void handle_login_post(AsyncWebServerRequest *request) {
     int admin_id = users_get_current_admin();
     if (admin_id < 0 || !request->hasParam("password", true)) {
@@ -217,22 +275,22 @@ static void handle_login_post(AsyncWebServerRequest *request) {
     }
 
     String password = request->getParam("password", true)->value();
-    if (!users_verify_password(admin_id, password.c_str())) {
+    if (password != get_admin_password()) {
         request->send(200, "text/html", render_login_page("Wrong password."));
         return;
     }
 
     int slot = create_session(admin_id);
-    String target = users_is_password_default(admin_id) ? "/change-password" : "/";
 
     AsyncWebServerResponse *response = request->beginResponse(302, "text/plain", "");
-    response->addHeader("Location", target);
+    response->addHeader("Location", "/");
     char cookie[64];
     snprintf(cookie, sizeof(cookie), "session=%s; Path=/; HttpOnly", _sessions[slot].token);
     response->addHeader("Set-Cookie", cookie);
     request->send(response);
 }
 
+// POST /logout -- clears the session and redirects to /login.
 static void handle_logout(AsyncWebServerRequest *request) {
     int slot = find_session_slot(request);
     if (slot >= 0) _sessions[slot].active = false;
@@ -243,48 +301,9 @@ static void handle_logout(AsyncWebServerRequest *request) {
     request->send(response);
 }
 
-static String render_change_password_page(const char *error, bool forced) {
-    String html = "<h2>Change Password</h2>";
-    if (forced) {
-        html += "<p class='balance'>This admin account is still on the shared default "
-                "password -- please set a real one now.</p>";
-    }
-    if (error) html += "<p class='balance'>" + String(error) + "</p>";
-    html += "<form method='POST' action='/change-password'>";
-    html += "New password: <input type='password' name='password' autofocus required><br><br>";
-    html += "Confirm: <input type='password' name='confirm' required><br><br>";
-    html += "<button type='submit'>Save</button></form>";
-    return render_page("Change Password", "Admin", html);
-}
-
-static void handle_change_password(AsyncWebServerRequest *request) {
-    int user_id;
-    if (!require_auth(request, &user_id)) { redirect_to_login(request); return; }
-    request->send(200, "text/html", render_change_password_page(nullptr, users_is_password_default(user_id)));
-}
-
-static void handle_change_password_post(AsyncWebServerRequest *request) {
-    int user_id;
-    if (!require_auth(request, &user_id)) { redirect_to_login(request); return; }
-
-    String password = request->hasParam("password", true) ? request->getParam("password", true)->value() : "";
-    String confirm   = request->hasParam("confirm", true)  ? request->getParam("confirm", true)->value()  : "";
-
-    if (password.length() < 4) {
-        request->send(200, "text/html", render_change_password_page("Password too short.", users_is_password_default(user_id)));
-        return;
-    }
-    if (password != confirm) {
-        request->send(200, "text/html", render_change_password_page("Passwords don't match.", users_is_password_default(user_id)));
-        return;
-    }
-
-    users_set_password(user_id, password.c_str());
-    request->redirect("/");
-}
-
 // ── Home ─────────────────────────────────────────────────────────────────────
 
+// Renders the Home dashboard (outstanding balance/checkout/user/item stats).
 static String render_home_page() {
     int outstanding_cents = 0, outstanding_count = 0, user_count = 0, item_count = 0;
 
@@ -322,12 +341,14 @@ static String render_home_page() {
     return render_page("Snack Cart", "Home", html);
 }
 
+// GET / -- the Home dashboard.
 static void handle_home(AsyncWebServerRequest *request) {
     request->send(200, "text/html", render_home_page());
 }
 
 // ── Items (was the root page) ───────────────────────────────────────────────
 
+// Renders the Items page: an editable table of the catalog + an Add Item form.
 static String render_items_page() {
     String html = "<h2>Items</h2><table>";
     html += "<tr><th>Name</th><th>Price ($)</th><th>Stocked</th><th></th></tr>";
@@ -362,10 +383,12 @@ static String render_items_page() {
     return render_page("Items", "Items", html);
 }
 
+// GET /item -- the Items page.
 static void handle_items(AsyncWebServerRequest *request) {
     request->send(200, "text/html", render_items_page());
 }
 
+// POST /item/add -- creates a new item from the Add Item form.
 static void handle_item_add(AsyncWebServerRequest *request) {
     if (!require_auth(request)) { redirect_to_login(request); return; }
     if (request->hasParam("name", true) && request->hasParam("price", true)) {
@@ -386,6 +409,7 @@ static void handle_item_add(AsyncWebServerRequest *request) {
     request->redirect("/item");
 }
 
+// POST /item/edit -- saves one item row's name/price/stock.
 static void handle_item_edit(AsyncWebServerRequest *request) {
     if (!require_auth(request)) { redirect_to_login(request); return; }
     if (request->hasParam("id", true) && request->hasParam("name", true) && request->hasParam("price", true)) {
@@ -408,6 +432,7 @@ static void handle_item_edit(AsyncWebServerRequest *request) {
     request->redirect("/item");
 }
 
+// POST /item/delete -- deletes one item row.
 static void handle_item_delete(AsyncWebServerRequest *request) {
     if (!require_auth(request)) { redirect_to_login(request); return; }
     if (request->hasParam("id", true)) {
@@ -424,6 +449,8 @@ static void handle_item_delete(AsyncWebServerRequest *request) {
 
 // ── Balance ("the clearable list") ─────────────────────────────────────────
 
+// Renders the Balance page: every outstanding checkout, grouped by user, with a Clear
+// Selected form to mark payments received.
 static String render_balance_page() {
     String html = "<h2>Balance</h2>";
     html += "<form method='POST' action='/checkout/clear'>";
@@ -491,14 +518,17 @@ static String render_balance_page() {
     return render_page("Balance", "Balance", html);
 }
 
+// GET /balance -- the Balance page.
 static void handle_balance(AsyncWebServerRequest *request) {
     request->send(200, "text/html", render_balance_page());
 }
 
+// POST /checkout/clear -- marks every checked checkout id cleared.
 static void handle_checkout_clear(AsyncWebServerRequest *request) {
     if (!require_auth(request)) { redirect_to_login(request); return; }
-    // No RTC/NTP wired yet (see project notes) — time(nullptr) is a placeholder that will
-    // read real wall-clock time once that lands, with no schema/query changes needed here.
+    // DS3231 RTC wired and confirmed 2026-08-28/2026-09-14 (see rtc.cpp) -- time(nullptr)
+    // reads real wall-clock time, synced from the chip at boot (this device is AP-only,
+    // no NTP path at all -- see rtc.h).
     long now = (long)time(nullptr);
     int params = request->params();
     for (int i = 0; i < params; i++) {
@@ -518,6 +548,7 @@ static void handle_checkout_clear(AsyncWebServerRequest *request) {
 
 // ── Report (read-only lifetime totals) ──────────────────────────────────────
 
+// Renders the Report page: read-only lifetime per-item and per-user totals.
 static String render_report_page() {
     String html = "<h2>Report</h2>";
 
@@ -575,18 +606,20 @@ static String render_report_page() {
     return render_page("Report", "Report", html);
 }
 
+// GET /report -- the Report page.
 static void handle_report(AsyncWebServerRequest *request) {
     request->send(200, "text/html", render_report_page());
 }
 
 // ── Users ────────────────────────────────────────────────────────────────────
 
+// Renders the Users page: an editable table of every enrolled person.
 static String render_users_page() {
     String html = "<h2>Users</h2><table>";
     html += "<tr><th>First</th><th>Last</th><th>Badge</th><th>Registered</th><th>Admin</th><th>Active</th><th></th></tr>";
 
     sqlite3_stmt *stmt;
-    const char *sql = "SELECT id, first_name, last_name, badge_barcode, created_at, active, admin, password_is_default FROM users ORDER BY first_name COLLATE NOCASE, last_name COLLATE NOCASE;";
+    const char *sql = "SELECT id, first_name, last_name, badge_barcode, created_at, active, admin FROM users ORDER BY first_name COLLATE NOCASE, last_name COLLATE NOCASE;";
     if (sqlite3_prepare_v2(db_handle(), sql, -1, &stmt, nullptr) == SQLITE_OK) {
         while (sqlite3_step(stmt) == SQLITE_ROW) {
             int    id       = sqlite3_column_int(stmt, 0);
@@ -596,7 +629,6 @@ static String render_users_page() {
             long   created  = sqlite3_column_int64(stmt, 4);
             bool   active   = sqlite3_column_int(stmt, 5) != 0;
             bool   admin    = sqlite3_column_int(stmt, 6) != 0;
-            bool   is_default = sqlite3_column_int(stmt, 7) != 0;
 
             html += "<tr" + String(active ? "" : " style='opacity:0.5'") + "><form method='POST' action='/user/edit'>";
             html += "<input type='hidden' name='id' value='" + String(id) + "'>";
@@ -610,11 +642,6 @@ static String render_users_page() {
             html += "<form method='POST' action='/user/delete' onsubmit=\"return confirm('Delete this user? Their checkout history stays but will show as an unknown user.');\">";
             html += "<input type='hidden' name='id' value='" + String(id) + "'>";
             html += "<button class='del' type='submit'>Delete</button></form>";
-            if (admin) {
-                html += " <form method='POST' action='/user/reset-password' onsubmit=\"return confirm('Reset password to the shared default?');\">";
-                html += "<input type='hidden' name='id' value='" + String(id) + "'>";
-                html += "<button type='submit'>Reset PW" + String(is_default ? " (default)" : "") + "</button></form>";
-            }
             html += "</td></tr>";
         }
         sqlite3_finalize(stmt);
@@ -623,22 +650,30 @@ static String render_users_page() {
             "and having an admin walk them through Add User (Admin Menu) — no self-service, no add-user form "
             "here. Unchecking Active turns a badge away at the device (with a message) instead of starting a "
             "transaction, without deleting them or touching their checkout history — use this instead of "
-            "Delete for e.g. an outstanding balance. \"Reset PW\" puts an admin account back on the shared "
-            "default password (forces them to set a new one on next login) — any logged-in admin can do this "
-            "to any admin, including themselves, on the assumption this is a small trust-based system.</p>";
+            "Delete for e.g. an outstanding balance. Admin login uses one shared password for the whole "
+            "device (Settings &gt; Security &gt; Admin Password on the cart), not a per-account one, so "
+            "there's nothing to reset here per-user.</p>";
     return render_page("Users", "Users", html);
 }
 
+// GET /users -- the Users page.
 static void handle_users(AsyncWebServerRequest *request) {
     request->send(200, "text/html", render_users_page());
 }
 
+// POST /user/edit -- saves one user's name and active flag.
 static void handle_user_edit(AsyncWebServerRequest *request) {
     if (!require_auth(request)) { redirect_to_login(request); return; }
     if (request->hasParam("id", true) && request->hasParam("first", true) && request->hasParam("last", true)) {
         int    id     = request->getParam("id", true)->value().toInt();
         String first  = request->getParam("first", true)->value();
         String last   = request->getParam("last", true)->value();
+        // Keep names all-caps everywhere, matching the on-device wheel (which only offers
+        // A-Z) — this is the one other write path (besides users_create()/users_set_name()
+        // in users.cpp) that accepts free-typed text and could otherwise introduce mixed
+        // case. See the upper_copy() comment in users.cpp for the full reasoning.
+        first.toUpperCase();
+        last.toUpperCase();
         // Unchecked checkboxes aren't sent at all in an HTML form POST — presence, not
         // value, is what "checked" means here.
         bool   active = request->hasParam("active", true);
@@ -656,6 +691,7 @@ static void handle_user_edit(AsyncWebServerRequest *request) {
     request->redirect("/users");
 }
 
+// POST /user/delete -- deletes one user row.
 static void handle_user_delete(AsyncWebServerRequest *request) {
     if (!require_auth(request)) { redirect_to_login(request); return; }
     if (request->hasParam("id", true)) {
@@ -673,17 +709,9 @@ static void handle_user_delete(AsyncWebServerRequest *request) {
     request->redirect("/users");
 }
 
-static void handle_user_reset_password(AsyncWebServerRequest *request) {
-    if (!require_auth(request)) { redirect_to_login(request); return; }
-    if (request->hasParam("id", true)) {
-        int id = request->getParam("id", true)->value().toInt();
-        users_reset_password(id);
-    }
-    request->redirect("/users");
-}
-
 // ── Admin ────────────────────────────────────────────────────────────────────
 
+// Renders the Admin page: device status, payment settings, and login/logout.
 static String render_admin_page(AsyncWebServerRequest *request) {
     String html = "<h2>Admin</h2>";
 
@@ -739,24 +767,28 @@ static String render_admin_page(AsyncWebServerRequest *request) {
     if (logged_in) {
         const User *u = users_get_by_id(auth_user_id);
         html += "<p>Logged in as <b>" + html_escape(u ? String(u->first_name) : "admin") + "</b>. ";
-        html += "<a href='/change-password'>Change password</a> &middot; ";
         html += "<form method='POST' action='/logout' style='display:inline'><button type='submit'>Log out</button></form></p>";
     } else {
         html += "<p><a href='/login'>Log in</a> to edit items, users, or these settings.</p>";
     }
-    html += "<p class='muted'>Editing items/users/settings requires an admin login (salted SHA-256, "
-            "password-only — identity comes from whichever admin badge was last scanned on the device, "
-            "see users_get_current_admin()). Viewing pages doesn't require login — the WiFi AP password "
-            "is still the first gate for reaching this portal at all. Change the placeholder AP "
-            "password in <code>webserver.cpp</code> before this leaves the workbench.</p></div>";
+    html += "<p class='muted'>Editing items/users/settings requires an admin login — one shared "
+            "plaintext password for the whole device (set on-device: Settings &gt; Security &gt; "
+            "Admin Password), password-only, identity comes from whichever admin badge was last "
+            "scanned on the device (see users_get_current_admin()). Viewing pages doesn't require "
+            "login — the WiFi AP password is still the first gate for reaching this portal at all "
+            "(also set on-device: Settings &gt; Security &gt; WiFi Password). Deliberately no "
+            "hashing/salting on either — this AP is off most of the time and local-range-only, no "
+            "real threat model to justify it.</p></div>";
 
     return render_page("Admin", "Admin", html);
 }
 
+// GET /admin -- the Admin page.
 static void handle_admin(AsyncWebServerRequest *request) {
     request->send(200, "text/html", render_admin_page(request));
 }
 
+// POST /admin/settings -- saves the Venmo owner name/handle.
 static void handle_admin_settings(AsyncWebServerRequest *request) {
     if (!require_auth(request)) { redirect_to_login(request); return; }
     String handle = request->hasParam("venmo_handle", true) ? request->getParam("venmo_handle", true)->value() : "";
@@ -796,30 +828,49 @@ static void handle_admin_settings(AsyncWebServerRequest *request) {
 
 // ── init ─────────────────────────────────────────────────────────────────────
 
+// Returns the fixed AP network name.
 const char *webserver_ap_ssid()     { return AP_SSID; }
-const char *webserver_ap_password() { return AP_PASSWORD; }
+// Returns the current AP password (config-backed with a fallback default).
+const char *webserver_ap_password() { return get_ap_password(); }
 
+// Called from screen_wifi_password.cpp's editor. Rejects anything under 8 chars outright
+// (WPA2-PSK's real minimum, not a policy choice) rather than silently saving something
+// softAP() would just fail on later.
+bool webserver_set_ap_password(const char *password) {
+    if (!password || strlen(password) < 8) return false;
+    return db_config_set(AP_PASSWORD_CONFIG_KEY, password);
+}
+
+// Returns the current admin login password (config-backed with a fallback default).
+const char *webserver_admin_password() { return get_admin_password(); }
+
+// Saves a new admin password to config -- returns false (nothing written) if empty.
+bool webserver_set_admin_password(const char *password) {
+    if (!password || strlen(password) == 0) return false;
+    return db_config_set(ADMIN_PASSWORD_CONFIG_KEY, password);
+}
+
+// Powers the WiFi radio on in AP mode and starts listening for HTTP connections.
 void webserver_start_ap() {
     WiFi.mode(WIFI_AP);
-    WiFi.softAP(AP_SSID, AP_PASSWORD);
+    WiFi.softAP(AP_SSID, get_ap_password());  // re-read every time -- picks up a change with no reboot needed
     IPAddress ip = WiFi.softAPIP();
     Serial.printf("[WEB] AP \"%s\" up — connect, then browse to http://%s/\n", AP_SSID, ip.toString().c_str());
     _server.begin();  // radio was off (WIFI_OFF drops the listening socket) -- re-bind every time
 }
 
+// Disconnects any clients and powers the WiFi radio off entirely.
 void webserver_stop_ap() {
     WiFi.softAPdisconnect(true);  // kick any connected clients, tear down the AP
     WiFi.mode(WIFI_OFF);          // power the radio down fully, not just disconnect
     Serial.println("[WEB] AP down, radio off");
 }
 
+// Registers every HTTP route. Call once at boot -- does not touch the radio.
 void webserver_init() {
     _server.on("/login", HTTP_GET, handle_login);
     _server.on("/login", HTTP_POST, handle_login_post);
     _server.on("/logout", HTTP_POST, handle_logout);
-    _server.on("/change-password", HTTP_GET, handle_change_password);
-    _server.on("/change-password", HTTP_POST, handle_change_password_post);
-    _server.on("/user/reset-password", HTTP_POST, handle_user_reset_password);
     _server.on("/", HTTP_GET, handle_home);
     _server.on("/balance", HTTP_GET, handle_balance);
     _server.on("/checkout/clear", HTTP_POST, handle_checkout_clear);

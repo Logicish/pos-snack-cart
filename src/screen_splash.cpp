@@ -3,7 +3,15 @@
 #include "header.h"
 #include "theme.h"
 #include "buttons.h"
+#include "session_timer.h"
 #include <lvgl.h>
+
+/*
+  Author--- LogicishDesigns
+  Date----- September 2026
+  Function- Implements the boot splash screen declared in screen_splash.h -- shows
+            the wordmark for SPLASH_DURATION_MS, then falls through to IDLE.
+*/
 
 #define SPLASH_DURATION_MS 2000  // how long the splash shows before falling through to IDLE
 
@@ -12,6 +20,7 @@ LV_IMG_DECLARE(fish_right);
 static lv_obj_t   *_scr;
 static lv_timer_t *_timer;
 
+// Fires once SPLASH_DURATION_MS has elapsed, moving on to IDLE.
 static void cb_timeout(lv_timer_t *t) {
     lv_timer_del(t);
     _timer = nullptr;
@@ -27,10 +36,12 @@ static void cb_back() {
     screen_idle_load();
 }
 
+// True if this screen is the one currently on screen.
 bool screen_splash_is_active() {
     return _scr && lv_scr_act() == _scr;
 }
 
+// Loads the splash screen and starts its auto-advance timer.
 void screen_splash_push() {
     if (!_scr) {
         _scr = lv_obj_create(nullptr);
@@ -53,6 +64,7 @@ void screen_splash_push() {
     ButtonHandlers h;
     h.back = cb_back;
     buttons_set_handlers(h);
+    session_timer_disarm();  // nothing logged in yet at boot
 
     lv_scr_load(_scr);
 

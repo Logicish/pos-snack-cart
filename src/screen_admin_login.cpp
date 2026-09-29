@@ -1,5 +1,3 @@
-// "Admin Login" scan prompt, 2026-08-26 — see header comment for the reasoning. Same
-// armed-screen-intercepts-the-next-scan pattern as Restock/Add User/Price Check.
 #include "screen_admin_login.h"
 #include "screens.h"
 #include "header.h"
@@ -9,13 +7,24 @@
 #include "ui.h"
 #include <lvgl.h>
 
+/*
+  Author--- LogicishDesigns
+  Date----- September 2026
+  Function- Implements the Admin Login scan prompt declared in screen_admin_login.h.
+  Notes---- Same armed-screen-intercepts-the-next-scan pattern as Restock/Add
+            User/Price Check.
+*/
+
 static lv_obj_t *_scr;
 static lv_obj_t *_lbl;
 
+// Back returns to IDLE, cancelling the login attempt.
 static void cb_back() {
     screen_idle_load();
 }
 
+// Consumes a scan while this screen is active -- routes to the Admin Menu if it's a
+// recognized, active admin badge, otherwise shows why not and stays put.
 bool screen_admin_login_on_scan(const char *badge_id) {
     if (!_scr || lv_scr_act() != _scr) return false;
 
@@ -34,6 +43,7 @@ bool screen_admin_login_on_scan(const char *badge_id) {
     return true;
 }
 
+// Loads the Admin Login scan prompt.
 void screen_admin_login_push() {
     if (!_scr) {
         _scr = lv_obj_create(nullptr);
@@ -58,6 +68,7 @@ void screen_admin_login_push() {
 
     ButtonHandlers h;
     h.back = cb_back;
+    h.wantsScanner = true;  // this whole screen is "waiting for an admin badge scan"
     buttons_set_handlers(h);
 
     lv_scr_load(_scr);

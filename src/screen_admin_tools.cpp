@@ -31,6 +31,12 @@
 #include <lvgl.h>
 #include <Arduino.h>
 
+/*
+  Author--- LogicishDesigns
+  Date----- September 2026
+  Function- Implements the Advanced Tools submenu declared in screen_admin_tools.h.
+*/
+
 #define MENU_COUNT 4
 #define FOOTER_H   52
 
@@ -51,6 +57,7 @@ static const char *MENU_LABELS[MENU_COUNT] = {
     "4. DS3231 Test",
 };
 
+// Highlights the currently-selected row.
 static void refresh_cursor() {
     if (_prev_cursor >= 0 && _prev_cursor != _cursor) {
         lv_obj_set_style_bg_opa(_rows[_prev_cursor], LV_OPA_TRANSP, LV_PART_MAIN);
@@ -60,19 +67,32 @@ static void refresh_cursor() {
     lv_obj_scroll_to_view(_rows[_cursor], LV_ANIM_OFF);
 }
 
+// Up: moves the selection up one row, wrapping.
 static void cb_up() {
     _cursor = (_cursor - 1 + MENU_COUNT) % MENU_COUNT;
     refresh_cursor();
 }
 
+// Down: moves the selection down one row, wrapping.
 static void cb_down() {
     _cursor = (_cursor + 1) % MENU_COUNT;
     refresh_cursor();
 }
 
-// LEFT: jump ~a screenful down the list, same wrap-at-the-end behavior as
-// screen_add_item.cpp's ATTACH_PAGE/cb_attach_pagedown.
-static void cb_page_down() {
+// LEFT/RIGHT jump ~a screenful at a time, both directions wrapping -- remapped
+// 2026-09-15 from a Left-only forward accelerator to match Browse/Price, Item Lookup,
+// Balances, Inventory, and the Admin Menu's paging convention.
+static void cb_page_left() {
+    if (_cursor <= 0) {
+        _cursor = MENU_COUNT - 1;
+    } else {
+        _cursor -= TOOLS_PAGE;
+        if (_cursor < 0) _cursor = 0;
+    }
+    refresh_cursor();
+}
+
+static void cb_page_right() {
     if (_cursor >= MENU_COUNT - 1) {
         _cursor = 0;
     } else {
@@ -82,10 +102,12 @@ static void cb_page_down() {
     refresh_cursor();
 }
 
+// Back returns to the main Admin Menu.
 static void cb_back() {
     screen_menu_push();  // up one level to the main Admin Menu, not a full logout
 }
 
+// Enter opens whichever tool the selected row names.
 static void cb_enter() {
     switch (_cursor) {
         case 0: screen_sdinfo_push();      break;
@@ -95,6 +117,7 @@ static void cb_enter() {
     }
 }
 
+// Loads the Advanced Tools submenu.
 void screen_admin_tools_push() {
     _cursor = 0;
 
@@ -133,10 +156,10 @@ void screen_admin_tools_push() {
         lv_obj_t *legend = ui_legend(_scr);
         lv_obj_set_width(legend, SCREEN_W - 28);
         lv_obj_align(legend, LV_ALIGN_BOTTOM_MID, 0, -6);
-        char left_arrow[24], move_lbl[24];
-        snprintf(left_arrow, sizeof(left_arrow), "%s Next Screen", LV_SYMBOL_LEFT);
-        snprintf(move_lbl, sizeof(move_lbl), "%s%s Move", LV_SYMBOL_UP, LV_SYMBOL_DOWN);
-        ui_legend_row(legend, left_arrow, lv_color_hex(C_YELLOW), move_lbl, lv_color_hex(C_YELLOW));
+        char move_lbl[24], page_lbl[24];
+        snprintf(move_lbl, sizeof(move_lbl), "Move %s%s", LV_SYMBOL_UP, LV_SYMBOL_DOWN);
+        snprintf(page_lbl, sizeof(page_lbl), "Page %s%s", LV_SYMBOL_LEFT, LV_SYMBOL_RIGHT);
+        ui_legend_row(legend, move_lbl, lv_color_hex(C_YELLOW), page_lbl, lv_color_hex(C_YELLOW));
         ui_legend_row(legend, "Open", lv_color_hex(C_GREEN), "Back", lv_color_hex(C_RED));
     }
 
@@ -147,7 +170,8 @@ void screen_admin_tools_push() {
     ButtonHandlers h;
     h.up    = cb_up;
     h.down  = cb_down;
-    h.left  = cb_page_down;
+    h.left  = cb_page_left;
+    h.right = cb_page_right;
     h.enter = cb_enter;
     h.back  = cb_back;
     buttons_set_handlers(h);

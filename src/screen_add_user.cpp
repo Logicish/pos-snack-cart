@@ -8,13 +8,22 @@
 #include "ui.h"
 #include <lvgl.h>
 
+/*
+  Author--- LogicishDesigns
+  Date----- September 2026
+  Function- Implements the Add User scan prompt declared in screen_add_user.h.
+*/
+
 static lv_obj_t *_scr;
 static lv_obj_t *_lbl;
 
+// Back returns to the Users submenu.
 static void cb_back() {
     screen_user_menu_push();  // 2026-08-28 reorg -- was screen_menu_push()
 }
 
+// Consumes a scan while this screen is active -- rejects an already-enrolled badge,
+// otherwise hands off to the enroll (name-entry) flow.
 bool screen_add_user_on_scan(const char *badge_id) {
     if (!_scr || lv_scr_act() != _scr) return false;
 
@@ -28,6 +37,7 @@ bool screen_add_user_on_scan(const char *badge_id) {
     return true;
 }
 
+// Loads the Add User scan prompt.
 void screen_add_user_push() {
     if (!_scr) {
         _scr = lv_obj_create(nullptr);
@@ -52,6 +62,7 @@ void screen_add_user_push() {
 
     ButtonHandlers h;
     h.back = cb_back;
+    h.wantsScanner = true;  // waiting for the new person's badge
     buttons_set_handlers(h);
 
     lv_scr_load(_scr);

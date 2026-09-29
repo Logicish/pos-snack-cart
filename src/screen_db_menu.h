@@ -1,5 +1,12 @@
 #pragma once
 
+/*
+  Author--- LogicishDesigns
+  Date----- September 2026
+  Function- "DB" submenu -- lists every table for read-only browsing, plus manual
+            Backup Now / Restore Backup.
+*/
+
 // "DB" — sub-menu under Advanced Tools, 2026-08-28. Lists the DB's tables (order matches
 // screen_db_view.h's DbTable enum); picking one opens screen_db_view.cpp's generic
 // read-only row browser for it. Diagnostic only, no editing. Back returns to Advanced

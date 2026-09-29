@@ -1,13 +1,17 @@
 #pragma once
 #include <lvgl.h>
 
-// Shared bottom-legend widgets. Every screen spells out what the physical buttons do right
-// now, colour-matched to the button itself (see feedback-ux-explicit-legends): the
-// Left/Right (and Up/Down) directional pair in C_YELLOW on the top row, Enter in C_GREEN /
-// Back in C_RED on the bottom row. Pass "" for a side with no active button.
-//
-// Was three identical copies of make_legend_row() (screen_pos / screen_add_item / main)
-// plus assorted one-off footer labels; consolidated here 2026-08-27.
+/*
+  Author--- LogicishDesigns
+  Date----- September 2026
+  Function- Shared bottom-legend widgets. Every screen spells out what the physical
+            buttons do right now, colour-matched to the button itself: the Left/Right
+            (and Up/Down) directional pair in C_YELLOW on the top row, Enter in
+            C_GREEN / Back in C_RED on the bottom row. Pass "" for a side with no
+            active button.
+  Notes---- Was three identical copies of make_legend_row() (screen_pos / screen_add_item
+            / main) plus assorted one-off footer labels; consolidated here 2026-08-27.
+*/
 
 // Styled transparent flex-column to hold ui_legend_row()s. Caller positions it -- put a
 // grow spacer before it in a flex-column layout, or lv_obj_align() it on a plain screen

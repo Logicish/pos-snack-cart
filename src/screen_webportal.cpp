@@ -10,17 +10,25 @@
 #include <WiFi.h>
 #include <string.h>
 
+/*
+  Author--- LogicishDesigns
+  Date----- September 2026
+  Function- Implements the Web Portal landing screen declared in screen_webportal.h.
+*/
+
 static lv_obj_t *_scr;
 static lv_obj_t *_ssid_lbl;
 static lv_obj_t *_password_lbl;
 static lv_obj_t *_qr;
 static lv_obj_t *_url_lbl;
 
+// Back powers the radio off and returns to the Admin Menu.
 static void cb_back() {
     webserver_stop_ap();  // radio only runs while this screen is open
     screen_menu_push();
 }
 
+// Loads the landing screen and powers the WiFi radio on.
 void screen_webportal_push() {
     if (!_scr) {
         _scr = lv_obj_create(nullptr);

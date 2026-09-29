@@ -4,10 +4,18 @@
 #include <time.h>
 #include <Arduino.h>
 
-// No RTC/NTP wired yet — time(nullptr) is a placeholder that will read real wall-clock
-// time automatically once RTC/NTP lands, same interim convention webserver.cpp already
-// uses for checkouts.cleared_at.
+/*
+  Author--- LogicishDesigns
+  Date----- September 2026
+  Function- Implements the checkout module declared in checkouts.h -- saving a
+            completed cart as one atomic transaction (checkout + line items + stock
+            decrement), and reading back outstanding balances.
+  Notes---- DS3231 RTC wired and confirmed 2026-08-28/2026-09-14 (see rtc.cpp) --
+            time(nullptr) below reads real wall-clock time, synced from the chip at
+            boot (this device is AP-only, no NTP path at all -- see rtc.h).
+*/
 
+// Runs a raw SQL statement (used here for BEGIN/COMMIT/ROLLBACK), logging on failure.
 static bool exec(sqlite3 *db, const char *sql) {
     char *err = nullptr;
     int rc = sqlite3_exec(db, sql, nullptr, nullptr, &err);
@@ -19,6 +27,9 @@ static bool exec(sqlite3 *db, const char *sql) {
     return true;
 }
 
+// Saves a completed cart as one atomic transaction: one checkouts row, one
+// checkout_items row per line, and a stock decrement per line -- all inside a single
+// BEGIN/COMMIT so a failure anywhere rolls back everything, not just part of it.
 int checkout_save(int user_id, const CheckoutLine *lines, int line_count, int total_cents) {
     sqlite3 *db = db_handle();
     if (!db || line_count <= 0) return -1;
@@ -85,9 +96,17 @@ int checkout_save(int user_id, const CheckoutLine *lines, int line_count, int to
 
     Serial.printf("[CHECKOUT] Saved checkout %d for user %d: %d lines, $%d.%02d\n",
                   checkout_id, user_id, line_count, total_cents / 100, total_cents % 100);
+
+    // Real transaction data is the one thing on this device that can't be re-typed by hand
+    // if lost -- back it up automatically right after every checkout, not just at boot or
+    // on a manual trigger. Safe here specifically because COMMIT just finished (journal
+    // reset, pos.db is a complete consistent snapshot) -- see db_backup_now()'s comment.
+    db_backup_now();
+
     return checkout_id;
 }
 
+// Fills out[] with up to `max` uncleared checkouts, oldest first.
 int checkouts_get_outstanding(OutstandingCheckout *out, int max) {
     sqlite3 *db = db_handle();
     if (!db || max <= 0) return 0;
@@ -110,6 +129,31 @@ int checkouts_get_outstanding(OutstandingCheckout *out, int max) {
     return n;
 }
 
+// Fills out[] with up to `max` of one user's own uncleared checkouts, oldest first.
+int checkouts_get_outstanding_for_user(int user_id, OutstandingCheckout *out, int max) {
+    sqlite3 *db = db_handle();
+    if (!db || max <= 0) return 0;
+
+    sqlite3_stmt *stmt;
+    int n = 0;
+    const char *sql =
+        "SELECT id, user_id, total_price_cents, created_at FROM checkouts "
+        "WHERE user_id = ? AND cleared_at IS NULL ORDER BY id;";
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_int(stmt, 1, user_id);
+        while (n < max && sqlite3_step(stmt) == SQLITE_ROW) {
+            out[n].id                = sqlite3_column_int(stmt, 0);
+            out[n].user_id           = sqlite3_column_int(stmt, 1);
+            out[n].total_price_cents = sqlite3_column_int(stmt, 2);
+            out[n].created_at        = sqlite3_column_int64(stmt, 3);
+            n++;
+        }
+        sqlite3_finalize(stmt);
+    }
+    return n;
+}
+
+// Marks one checkout cleared (cleared_at = now). Never deletes the row.
 bool checkouts_clear(int checkout_id) {
     sqlite3 *db = db_handle();
     if (!db) return false;
@@ -125,6 +169,7 @@ bool checkouts_clear(int checkout_id) {
     return ok;
 }
 
+// Sums total_price_cents across one user's uncleared checkouts.
 int checkouts_get_balance_cents(int user_id) {
     sqlite3 *db = db_handle();
     if (!db) return 0;

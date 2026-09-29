@@ -1,5 +1,11 @@
 #pragma once
 
+/*
+  Author--- LogicishDesigns
+  Date----- September 2026
+  Function- "Add User" -- Users -> Add User: scan a badge to enroll a new person.
+*/
+
 // Admin Menu -> Add User: scan the new person's badge. Unknown badge -> drops straight into
 // the existing screen_enroll.cpp wheel flow (unchanged) to collect their name and confirm.
 // Already-enrolled badge -> a message, stays put so the admin can scan a different one.

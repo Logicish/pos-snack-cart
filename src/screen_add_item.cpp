@@ -11,6 +11,14 @@
 #include <Arduino.h>
 #include <string.h>
 
+/*
+  Author--- LogicishDesigns
+  Date----- September 2026
+  Function- Implements the Add/Attach Item flow declared in screen_add_item.h --
+            three states: ST_SCAN (waiting for a barcode), ST_ATTACH (catalog picker
+            for an unrecognized UPC), ST_NAME (character wheel for a brand-new item).
+*/
+
 // Character wheel for a new item's name. Cell dimensions are screen_enroll.cpp's
 // already-hardware-proven sizing (not shared code, just the same tested visuals); at that
 // width only 11 fit across the 320px screen, and real names run longer ("Starbucks
@@ -27,6 +35,7 @@ static const char CHARSET[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ -";
 #define IDX_DASH    27
 #define IDX_A       0
 
+// Returns how many cells the given wheel row has.
 static inline uint8_t row_len(uint8_t row) { return row == 0 ? ROW0_LEN : ROW1_LEN; }
 
 // ST_ATTACH's LEFT button jumps the highlight ~one screenful down the catalog list, so an
@@ -58,6 +67,7 @@ static void build_scan_ui();
 static void build_attach_ui();
 static void build_name_ui();
 
+// Clears the content area between states.
 static void clear_content() {
     lv_obj_clean(_content);
     memset(_cell,     0, sizeof(_cell));
@@ -67,10 +77,13 @@ static void clear_content() {
 
 // ============ ST_SCAN ============
 
+// Back returns to the Inventory submenu.
 static void cb_scan_back() {
     screen_inventory_menu_push();  // 2026-08-28 reorg -- was screen_menu_push()
 }
 
+// Consumes a scan while this screen is active -- opens Item Edit for a known UPC,
+// otherwise remembers it and moves into the attach/new-item picker.
 bool screen_add_item_on_scan(const char *upc) {
     if (!_scr || lv_scr_act() != _scr) return false;
     // Consume (and ignore) a stray scan during the wheel/attach sub-states rather than
@@ -92,6 +105,7 @@ bool screen_add_item_on_scan(const char *upc) {
     return true;
 }
 
+// Builds the ST_SCAN prompt UI.
 static void build_scan_ui() {
     lv_obj_t *lbl = lv_label_create(_content);
     lv_label_set_long_mode(lbl, LV_LABEL_LONG_WRAP);
@@ -113,6 +127,7 @@ static void build_scan_ui() {
 
     ButtonHandlers h;
     h.back = cb_scan_back;
+    h.wantsScanner = true;  // waiting for the item's barcode
     buttons_set_handlers(h);
 }
 
@@ -135,6 +150,7 @@ static void get_name(char *out, size_t out_len) {
     out[out_len - 1] = '\0';
 }
 
+// Redraws every wheel cell, highlighting the cursor cell.
 static void refresh_wheel_cells() {
     for (int row = 0; row < 2; row++) {
         for (int col = 0; col < row_len(row); col++) {
@@ -216,6 +232,7 @@ static void cb_wheel_back() {
     build_attach_ui();
 }
 
+// Builds one row of character cells for the name wheel.
 static void build_wheel_row(lv_obj_t *parent, uint8_t row) {
     // Width-to-content + a fixed inter-cell gap (not SPACE_BETWEEN) so the shorter row 2
     // left-aligns directly under row 1's first cells -- the two rows share one column grid,
@@ -251,6 +268,7 @@ static void build_wheel_row(lv_obj_t *parent, uint8_t row) {
     }
 }
 
+// Builds the ST_NAME (character wheel) UI.
 static void build_name_ui() {
     _wrow    = 0;
     _wcursor = 0;
@@ -305,6 +323,7 @@ static int visible_count() {
     return n > MAX_ITEMS ? MAX_ITEMS : n;
 }
 
+// Highlights the currently-selected catalog row.
 static void refresh_pick_cursor() {
     int n = visible_count();
     if (n == 0) return;
@@ -318,6 +337,7 @@ static void refresh_pick_cursor() {
     lv_obj_scroll_to_view(_pick_rows[_pick_cursor], LV_ANIM_OFF);
 }
 
+// Up: moves the catalog selection up one row, wrapping.
 static void cb_pick_up() {
     int n = visible_count();
     if (n == 0) return;
@@ -325,6 +345,7 @@ static void cb_pick_up() {
     refresh_pick_cursor();
 }
 
+// Down: moves the catalog selection down one row, wrapping.
 static void cb_pick_down() {
     int n = visible_count();
     if (n == 0) return;
@@ -346,18 +367,21 @@ static void cb_attach_pagedown() {
     refresh_pick_cursor();
 }
 
+// Right: switches to the new-item name wheel.
 static void cb_attach_new() {
     _state = ST_NAME;
     clear_content();
     build_name_ui();
 }
 
+// Back cancels the whole flow.
 static void cb_attach_cancel() {
     _state = ST_SCAN;
     clear_content();
     build_scan_ui();
 }
 
+// Enter: links the pending UPC to the highlighted catalog item.
 static void cb_attach_select() {
     const Item *it = items_get(_pick_cursor);
     if (!it) return;
@@ -365,6 +389,7 @@ static void cb_attach_select() {
     screen_item_edit_push(it->id, screen_add_item_push);
 }
 
+// Builds the ST_ATTACH (catalog picker) UI.
 static void build_attach_ui() {
     _pick_cursor = 0;
 
@@ -399,9 +424,24 @@ static void build_attach_ui() {
         lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
         _pick_rows[i] = row;
 
+        // it can be null if the underlying query failed -- see screen_inventory.cpp's
+        // matching guard for why this isn't just theoretical caution. Hidden items are
+        // deliberately still offered here (see items.h) -- attaching a new barcode to a
+        // discontinued-but-not-deleted item is a real use case -- but flagged so it's not
+        // confused with an active catalog entry.
         lv_obj_t *lbl = lv_label_create(row);
-        lv_label_set_text(lbl, it->name);
-        lv_obj_set_style_text_color(lbl, lv_color_hex(C_TEXT), LV_PART_MAIN);
+        if (!it) {
+            lv_label_set_text(lbl, "(error loading item)");
+            lv_obj_set_style_text_color(lbl, lv_color_hex(C_RED), LV_PART_MAIN);
+        } else if (it->hidden) {
+            char name_buf[ITEM_NAME_LEN + 12];
+            snprintf(name_buf, sizeof(name_buf), "%s [HIDDEN]", it->name);
+            lv_label_set_text(lbl, name_buf);
+            lv_obj_set_style_text_color(lbl, lv_color_hex(C_DIM), LV_PART_MAIN);
+        } else {
+            lv_label_set_text(lbl, it->name);
+            lv_obj_set_style_text_color(lbl, lv_color_hex(C_TEXT), LV_PART_MAIN);
+        }
         lv_obj_set_style_text_font(lbl, &lv_font_montserrat_16, LV_PART_MAIN);
     }
 
@@ -429,6 +469,7 @@ static void build_attach_ui() {
 
 // ============ public ============
 
+// Loads the Add/Attach Item flow, always starting at ST_SCAN.
 void screen_add_item_push() {
     _state = ST_SCAN;
 
@@ -446,6 +487,11 @@ void screen_add_item_push() {
         lv_obj_set_style_border_width(_content, 0, LV_PART_MAIN);
         lv_obj_set_style_pad_hor(_content, 12, LV_PART_MAIN);
         lv_obj_set_style_pad_ver(_content, 12, LV_PART_MAIN);
+        // The footer legend is this flex column's last child, so pad_ver's bottom inset
+        // was also its distance from the true screen edge -- overridden separately to
+        // match the ~6px margin every explicitly-aligned legend elsewhere uses (see
+        // screen_item_edit.cpp's identical fix).
+        lv_obj_set_style_pad_bottom(_content, 6, LV_PART_MAIN);
         lv_obj_set_style_pad_row(_content, 8, LV_PART_MAIN);
         lv_obj_set_layout(_content, LV_LAYOUT_FLEX);
         lv_obj_set_flex_flow(_content, LV_FLEX_FLOW_COLUMN);

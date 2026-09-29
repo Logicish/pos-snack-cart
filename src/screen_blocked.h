@@ -1,5 +1,12 @@
 #pragma once
 
+/*
+  Author--- LogicishDesigns
+  Date----- September 2026
+  Function- The "turned away" screen -- a message telling the person at the cart to
+            see an admin, with Back returning to IDLE.
+*/
+
 // Generic "can't start a transaction, see an admin" screen — used both for a real,
 // enrolled-but-inactive user (see users.active in snack_cart_pos.md) and, as of 2026-08-25,
 // an unrecognized badge (self-enrollment removed — owner's explicit "no guest checkout,

@@ -1,23 +1,37 @@
 #include "users.h"
-#include "auth.h"
 #include "db.h"
 #include <sqlite3.h>
 #include <string.h>
-#include <SD.h>
+#include <ctype.h>
 #include <Arduino.h>
 
-// Deliberately dumb/discoverable — the point is the forced password_is_default change flow
-// on first login, not secrecy of this string itself. See auth.h. "logicish" per explicit
-// request 2026-08-28 (was "changeme") — simple enough to remember, not so obvious it's
-// the first thing anyone would guess; this is a low-security, small trust-based system,
-// not something meant to resist a real attacker.
-#define DEFAULT_ADMIN_PASSWORD "logicish"
+/*
+  Author--- LogicishDesigns
+  Date----- September 2026
+  Function- Implements the enrolled-people table declared in users.h -- badge
+            lookup/creation/editing, the admin flag, and the current-admin tracker.
+*/
+
+// Names are stored all-caps everywhere, not just from the on-device character wheel (which
+// only offers A-Z anyway) — the web Users page's inline edit form accepts free-typed text,
+// and a mixed-case name from it next to an all-caps wheel-entered one was flagged 2026-08-28
+// as a real data-consistency risk (nothing compares names case-sensitively today — lookups
+// key off badge_barcode, sorting already uses COLLATE NOCASE — but better to not leave two
+// casing conventions sitting in the same column). Applied at every write path (users_create(),
+// users_set_name(); the web handler uses String's own toUpperCase()) rather than just the
+// wheel's input, so it's consistent regardless of source.
+static void upper_copy(char *dst, size_t dst_size, const char *src) {
+    size_t i = 0;
+    for (; src[i] != '\0' && i < dst_size - 1; i++) {
+        dst[i] = (char)toupper((unsigned char)src[i]);
+    }
+    dst[i] = '\0';
+}
 
 static User _cache;  // filled in by users_find_by_badge(), overwritten on the next call
 static int  _current_admin_id = -1;
 
-bool users_reset_password(int user_id);  // forward decl -- users_create() below calls this
-
+// Looks up one user by badge barcode.
 const User *users_find_by_badge(const char *badge_id) {
     if (!db_handle()) return nullptr;
 
@@ -46,6 +60,7 @@ const User *users_find_by_badge(const char *badge_id) {
     return result;
 }
 
+// Enrolls a new user (name uppercased before storing). Returns the new id, -1 on failure.
 int users_create(const char *badge_id, const char *first_name, const char *last_name, bool admin) {
     if (!db_handle()) return -1;
 
@@ -57,9 +72,13 @@ int users_create(const char *badge_id, const char *first_name, const char *last_
         Serial.printf("[USERS] create prepare failed: %s\n", sqlite3_errmsg(db_handle()));
         return -1;
     }
+    char first_upper[NAME_FIELD_LEN], last_upper[NAME_FIELD_LEN];
+    upper_copy(first_upper, sizeof(first_upper), first_name);
+    upper_copy(last_upper, sizeof(last_upper), last_name);
+
     sqlite3_bind_text(stmt, 1, badge_id, -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(stmt, 2, first_name, -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(stmt, 3, last_name, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, first_upper, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 3, last_upper, -1, SQLITE_TRANSIENT);
     sqlite3_bind_int(stmt, 4, admin ? 1 : 0);
     int rc = sqlite3_step(stmt);
     if (rc != SQLITE_DONE) {
@@ -69,64 +88,10 @@ int users_create(const char *badge_id, const char *first_name, const char *last_
     if (rc != SQLITE_DONE) return -1;
 
     int new_id = (int)sqlite3_last_insert_rowid(db_handle());
-    // Every admin gets the shared default password set automatically -- no separate manual
-    // step, and password_is_default forces a change on their first login.
-    if (admin) users_reset_password(new_id);
     return new_id;
 }
 
-// Bulk-enrollment from the SD card, not firmware source — real names/badge numbers have
-// no business being hardcoded into compiled firmware (they'd ship in every .bin and sit
-// in source history forever). Format: one user per line, "badge,first,last,admin" —
-// admin is 1 or 0 (or absent/anything else, treated as 0). Blank lines and lines starting
-// with '#' are skipped. Safe to leave this file on the card permanently and re-run every
-// boot — already-enrolled badges are skipped, so onboarding someone new later is just
-// "add a line, reboot," no firmware change needed. Missing file is not an error; this is
-// opportunistic, not required to boot.
-void users_import_from_sd() {
-    if (!db_handle() || !SD.exists("/seed_users.csv")) return;
-
-    File f = SD.open("/seed_users.csv", FILE_READ);
-    if (!f) return;
-
-    int imported = 0, skipped = 0, malformed = 0;
-    while (f.available()) {
-        String line = f.readStringUntil('\n');
-        line.trim();
-        if (line.length() == 0 || line.startsWith("#")) continue;
-
-        int c1 = line.indexOf(',');
-        int c2 = (c1 >= 0) ? line.indexOf(',', c1 + 1) : -1;
-        if (c1 < 0 || c2 < 0) {
-            Serial.printf("[USERS] skipping malformed seed line: %s\n", line.c_str());
-            malformed++;
-            continue;
-        }
-        int c3 = line.indexOf(',', c2 + 1);  // admin field is optional — c3 may be -1
-
-        String badge = line.substring(0, c1);            badge.trim();
-        String first = line.substring(c1 + 1, c2);        first.trim();
-        String last  = (c3 >= 0) ? line.substring(c2 + 1, c3) : line.substring(c2 + 1);
-        last.trim();
-        bool   admin = (c3 >= 0) && line.substring(c3 + 1).toInt() != 0;
-
-        if (badge.length() == 0 || first.length() == 0) {
-            Serial.printf("[USERS] skipping malformed seed line: %s\n", line.c_str());
-            malformed++;
-            continue;
-        }
-
-        if (users_find_by_badge(badge.c_str())) {
-            skipped++;
-            continue;
-        }
-        if (users_create(badge.c_str(), first.c_str(), last.c_str(), admin) >= 0) imported++;
-    }
-    f.close();
-    Serial.printf("[USERS] SD seed import: %d new, %d already enrolled, %d malformed\n",
-                  imported, skipped, malformed);
-}
-
+// Toggles a user active/inactive (turned away at the device without deleting them).
 bool users_set_active(int id, bool active) {
     if (!db_handle()) return false;
 
@@ -139,6 +104,7 @@ bool users_set_active(int id, bool active) {
     return rc == SQLITE_DONE;
 }
 
+// Returns the total number of rows in the users table.
 int users_count() {
     if (!db_handle()) return 0;
 
@@ -151,6 +117,7 @@ int users_count() {
     return count;
 }
 
+// Looks up one user by database id.
 const User *users_get_by_id(int id) {
     if (!db_handle()) return nullptr;
 
@@ -176,19 +143,26 @@ const User *users_get_by_id(int id) {
     return result;
 }
 
+// Updates a user's name (uppercased before storing).
 bool users_set_name(int id, const char *first_name, const char *last_name) {
     if (!db_handle()) return false;
 
     sqlite3_stmt *stmt;
     if (sqlite3_prepare_v2(db_handle(), "UPDATE users SET first_name=?, last_name=? WHERE id=?;", -1, &stmt, nullptr) != SQLITE_OK) return false;
-    sqlite3_bind_text(stmt, 1, first_name, -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(stmt, 2, last_name, -1, SQLITE_TRANSIENT);
+
+    char first_upper[NAME_FIELD_LEN], last_upper[NAME_FIELD_LEN];
+    upper_copy(first_upper, sizeof(first_upper), first_name);
+    upper_copy(last_upper, sizeof(last_upper), last_name);
+
+    sqlite3_bind_text(stmt, 1, first_upper, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, last_upper, -1, SQLITE_TRANSIENT);
     sqlite3_bind_int(stmt, 3, id);
     bool ok = sqlite3_step(stmt) == SQLITE_DONE;
     sqlite3_finalize(stmt);
     return ok;
 }
 
+// Toggles a user's admin flag.
 bool users_set_admin(int id, bool admin) {
     if (!db_handle()) return false;
 
@@ -198,18 +172,10 @@ bool users_set_admin(int id, bool admin) {
     sqlite3_bind_int(stmt, 2, id);
     bool ok = sqlite3_step(stmt) == SQLITE_DONE;
     sqlite3_finalize(stmt);
-
-    // Promoting to admin needs a real password to log into the web portal with -- same
-    // shared-default + forced-change flow users_create() already arms for a brand-new
-    // admin (2026-08-28: this toggle used to just flip the column, leaving a promoted
-    // user with no password until the next boot's users_backfill_admin_passwords() catch-
-    // all happened to run). Demoting doesn't need the reverse -- a stale password_hash on
-    // a former admin is inert, nothing ever checks it once admin=0.
-    if (ok && admin) users_reset_password(id);
-
     return ok;
 }
 
+// Fills out[] with every user, sorted first-then-last-name alphabetically.
 int users_get_all(User *out, int max) {
     if (!db_handle() || max <= 0) return 0;
 
@@ -236,83 +202,20 @@ int users_get_all(User *out, int max) {
     return n;
 }
 
-bool users_verify_password(int user_id, const char *password) {
-    if (!db_handle()) return false;
-
-    sqlite3_stmt *stmt;
-    const char *sql = "SELECT password_hash, password_salt FROM users WHERE id = ?;";
-    if (sqlite3_prepare_v2(db_handle(), sql, -1, &stmt, nullptr) != SQLITE_OK) return false;
-    sqlite3_bind_int(stmt, 1, user_id);
-
-    bool ok = false;
-    if (sqlite3_step(stmt) == SQLITE_ROW) {
-        const char *hash = (const char *)sqlite3_column_text(stmt, 0);
-        const char *salt = (const char *)sqlite3_column_text(stmt, 1);
-        if (hash && salt) ok = auth_verify_password(password, hash, salt);
-    }
-    sqlite3_finalize(stmt);
-    return ok;
-}
-
-bool users_is_password_default(int user_id) {
-    if (!db_handle()) return false;
-
-    sqlite3_stmt *stmt;
-    bool is_default = false;
-    if (sqlite3_prepare_v2(db_handle(), "SELECT password_is_default FROM users WHERE id = ?;", -1, &stmt, nullptr) == SQLITE_OK) {
-        sqlite3_bind_int(stmt, 1, user_id);
-        if (sqlite3_step(stmt) == SQLITE_ROW) is_default = sqlite3_column_int(stmt, 0) != 0;
-        sqlite3_finalize(stmt);
-    }
-    return is_default;
-}
-
-static bool set_password_internal(int user_id, const char *password, bool is_default) {
-    if (!db_handle()) return false;
-
-    char hash[AUTH_HASH_HEX_LEN], salt[AUTH_SALT_HEX_LEN];
-    auth_hash_password(password, hash, salt);
-
-    sqlite3_stmt *stmt;
-    const char *sql = "UPDATE users SET password_hash=?, password_salt=?, password_is_default=? WHERE id=?;";
-    if (sqlite3_prepare_v2(db_handle(), sql, -1, &stmt, nullptr) != SQLITE_OK) return false;
-    sqlite3_bind_text(stmt, 1, hash, -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(stmt, 2, salt, -1, SQLITE_TRANSIENT);
-    sqlite3_bind_int(stmt, 3, is_default ? 1 : 0);
-    sqlite3_bind_int(stmt, 4, user_id);
-    bool ok = sqlite3_step(stmt) == SQLITE_DONE;
-    sqlite3_finalize(stmt);
-    return ok;
-}
-
-bool users_set_password(int user_id, const char *new_password) {
-    return set_password_internal(user_id, new_password, false);
-}
-
-bool users_reset_password(int user_id) {
-    return set_password_internal(user_id, DEFAULT_ADMIN_PASSWORD, true);
-}
-
+// Records which admin most recently scanned in on-device this boot.
 void users_set_current_admin(int user_id) { _current_admin_id = user_id; }
+// Returns that admin's id, or -1 if none has scanned in yet this boot.
 int  users_get_current_admin()            { return _current_admin_id;  }
 
-void users_backfill_admin_passwords() {
-    if (!db_handle()) return;
+// True if at least one admin row exists in the users table.
+bool users_has_admin() {
+    if (!db_handle()) return false;
 
     sqlite3_stmt *stmt;
-    if (sqlite3_prepare_v2(db_handle(),
-            "SELECT id FROM users WHERE admin = 1 AND password_hash IS NULL;",
-            -1, &stmt, nullptr) != SQLITE_OK) return;
-
-    // Collect ids first, then update -- avoids running UPDATE statements on this connection
-    // while a SELECT statement is still mid-iteration. Small device, few admins realistically.
-    int ids[16];
-    int n = 0;
-    while (n < 16 && sqlite3_step(stmt) == SQLITE_ROW) ids[n++] = sqlite3_column_int(stmt, 0);
-    sqlite3_finalize(stmt);
-
-    for (int i = 0; i < n; i++) {
-        users_reset_password(ids[i]);
-        Serial.printf("[USERS] backfilled default password for admin id %d\n", ids[i]);
+    bool found = false;
+    if (sqlite3_prepare_v2(db_handle(), "SELECT 1 FROM users WHERE admin = 1 LIMIT 1;", -1, &stmt, nullptr) == SQLITE_OK) {
+        found = sqlite3_step(stmt) == SQLITE_ROW;
+        sqlite3_finalize(stmt);
     }
+    return found;
 }

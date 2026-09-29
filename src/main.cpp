@@ -11,14 +11,19 @@
 #include "screen_blocked.h"
 #include "screen_screensaver.h"
 #include "screen_splash.h"
+#include "screen_sd_error.h"
+#include "screen_setup_wizard.h"
 #include "screen_item_edit.h"
 #include "screen_restock.h"
 #include "screen_add_item.h"
 #include "screen_add_user.h"
 #include "screen_gm65_test.h"
-#include "screen_price_scan.h"
+#include "screen_gm65_settings.h"
+#include "screen_extras.h"
 #include "screen_admin_login.h"
 #include "idle_timer.h"
+#include "session_timer.h"
+#include "system_alerts.h"
 #include "rtc.h"
 #include "ui.h"
 #include "users.h"
@@ -27,6 +32,17 @@
 #include "backlight.h"
 #include "db.h"
 #include "webserver.h"
+
+/*
+  Author--- LogicishDesigns
+  Date----- September 2026
+  Function- Entry point: hardware bring-up (display/LVGL/backlight/DB/scanner/WiFi),
+            the IDLE ("Start") screen, badge-scan routing to whichever screen wants
+            it, and the main setup()/loop() Arduino pair.
+  Notes---- Every top-level "which screen owns this scan" decision funnels through
+            on_scan() below; individual screens expose their own *_on_scan()
+            interceptor so this file never needs to know their internal state.
+*/
 
 // ── hardware ──────────────────────────────────────────────────────────────────
 TFT_eSPI       tft;
@@ -55,6 +71,7 @@ static lv_color_t        *buf2;
 // ── idle screen ───────────────────────────────────────────────────────────────
 static lv_obj_t *idle_scr;
 
+// Loads the Start/IDLE screen -- the device's resting state, waiting for a badge scan.
 void screen_idle_load() {
     header_set_visible(true);
     header_set_current_user("");
@@ -70,17 +87,20 @@ void screen_idle_load() {
     // whenever GM65 scan-mode logic gets wired into screen_screensaver_push()/cb_wake(),
     // it automatically covers both the timeout and this manual trigger at once.
     ButtonHandlers h;
-    h.left  = screen_price_scan_push;   // scan a UPC directly for its price
-    h.right = screen_browse_push;       // scroll the existing Price Check/Browse list
+    h.left  = screen_extras_push;       // "Extras" -- novelty/non-POS entries, see screen_extras.h
+    h.right = screen_browse_push;       // scroll and/or scan-for-price, same screen now
     h.enter = screen_admin_login_push;
     h.back  = screen_screensaver_push;
+    h.wantsScanner = true;  // the whole point of IDLE -- waiting for a badge scan
     buttons_set_handlers(h);
     idle_timer_arm();
+    session_timer_disarm();  // nothing logged in at IDLE -- nothing to auto-log-out of
 
     lv_scr_load(idle_scr);
 }
 
 // ── LVGL callbacks ────────────────────────────────────────────────────────────
+// LVGL's display flush callback -- pushes one rendered area out to the physical panel.
 static void lv_flush(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *color_p) {
     uint32_t w = area->x2 - area->x1 + 1;
     uint32_t h = area->y2 - area->y1 + 1;
@@ -92,6 +112,7 @@ static void lv_flush(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *colo
 }
 
 // ── init helpers ──────────────────────────────────────────────────────────────
+// Initializes LVGL: PSRAM draw buffers and the display driver.
 static void lvgl_init() {
     lv_init();
     buf1 = (lv_color_t *)heap_caps_malloc(SCREEN_W * 80 * sizeof(lv_color_t),
@@ -109,6 +130,7 @@ static void lvgl_init() {
     lv_disp_drv_register(&disp_drv);
 }
 
+// Builds the Start screen's static content (label + legend) once, at boot.
 static void build_idle_screen() {
     idle_scr = lv_scr_act();
     lv_obj_set_style_bg_color(idle_scr, lv_color_hex(C_BG), LV_PART_MAIN);
@@ -131,22 +153,27 @@ static void build_idle_screen() {
     lv_obj_align(legend, LV_ALIGN_BOTTOM_MID, 0, -16);
 
     char left_arrow[24], right_arrow[24];
-    snprintf(left_arrow, sizeof(left_arrow), "%s Price Check", LV_SYMBOL_LEFT);
-    snprintf(right_arrow, sizeof(right_arrow), "Browse Items %s", LV_SYMBOL_RIGHT);
+    snprintf(left_arrow, sizeof(left_arrow), "%s Extras", LV_SYMBOL_LEFT);
+    snprintf(right_arrow, sizeof(right_arrow), "Browse/Price %s", LV_SYMBOL_RIGHT);
     ui_legend_row(legend, left_arrow, lv_color_hex(C_YELLOW), right_arrow, lv_color_hex(C_YELLOW));
     ui_legend_row(legend, "Admin Login", lv_color_hex(C_GREEN), "Screen Saver", lv_color_hex(C_RED));
 }
 
 // ── badge scan routing ────────────────────────────────────────────────────────
+// Routes one scanned badge to whichever screen currently wants it (each screen's own
+// *_on_scan() gets first refusal), falling back to the default "known user -> POS /
+// unknown -> turned away" behavior if nothing claims it.
 static void on_scan(const char *badge_id) {
+    if (screen_setup_wizard_on_scan(badge_id)) return;  // first-boot/recovery wizard, if active
     if (screen_enroll_on_scan(badge_id)) return;
     if (screen_pos_on_scan(badge_id)) return;  // TRANSACTION screen active — treat as an item UPC, not a badge
     if (screen_restock_on_scan(badge_id)) return;
     if (screen_add_item_on_scan(badge_id)) return;
     if (screen_item_edit_on_scan(badge_id)) return;  // viewing an item — link another UPC to it
     if (screen_add_user_on_scan(badge_id)) return;   // admin's "Add User" mode armed — this scan is the new person's badge, not a login attempt
-    if (screen_price_scan_on_scan(badge_id)) return; // Start screen's scan-first Price Check armed
+    if (screen_browse_on_scan(badge_id)) return;     // Browse/Price screen active -- show that item's price
     if (screen_admin_login_on_scan(badge_id)) return; // Start screen's Admin Login armed
+    if (screen_extras_on_scan(badge_id)) return;      // Extras' badge gate armed
 
     const User *u = users_find_by_badge(badge_id);
     if (u) {
@@ -177,6 +204,44 @@ static void on_scan(const char *badge_id) {
 }
 
 // ── Arduino ───────────────────────────────────────────────────────────────────
+// Self-healing boot-time DB setup, 2026-09-14 — pulled out of setup() so screen_sd_error.cpp's
+// Retry button can re-run exactly this on demand, not just at boot. If the primary DB won't
+// open, or opens but fails even a basic SELECT (db_sanity_check() -- this SQLite build has
+// no real corruption detection available, see db.h), falls back to the raw-file backup
+// automatically. Only attempts the restore once per call, no retry loop -- if the backup is
+// missing or also bad, returns false so the caller can decide what that means (setup()
+// lands on screen_sd_error_push() instead of the normal boot flow; a Retry press just stays
+// on that screen with a refreshed diagnosis).
+bool boot_try_init_db() {
+    if (!db_init() || !db_sanity_check()) {
+        Serial.println("[DB] primary DB missing or failed a sanity check -- attempting restore from backup");
+        db_close();
+        if (db_restore_from_backup() && db_init() && db_sanity_check()) {
+            Serial.println("[DB] restored from backup and reopened successfully");
+            system_alerts_note_restored_from_backup();
+        } else {
+            Serial.println("[FATAL] DB unavailable even after a backup restore attempt");
+            system_alerts_refresh();
+            return false;
+        }
+    }
+
+    // SD-layer check, independent of the DB-specific one above -- a card that's gone
+    // write-protected or is failing can leave db_init()/db_sanity_check() looking fine
+    // (both only ever read) while writes silently don't happen. Logged either way, not
+    // gated on DB status, since it's worth knowing regardless.
+    bool sd_write_ok = sd_write_read_test();
+    Serial.printf("[SD] write/read test: %s\n", sd_write_ok ? "OK" : "FAILED");
+    system_alerts_set_sd_write_result(sd_write_ok);
+    items_init();
+    db_backup_now();  // fresh baseline every boot -- cheap (this device's DB stays small),
+                       // and guarantees a first backup exists even before any checkout ever runs
+    system_alerts_refresh();  // picks up SD/DB status computed above, for the Admin Menu banner
+    return true;
+}
+
+// Arduino entry point -- brings up the hardware, mounts the DB, and lands on whichever
+// boot screen fits the DB's state (normal splash / setup wizard / hard error).
 void setup() {
     Serial.begin(115200);
     delay(500);
@@ -186,15 +251,12 @@ void setup() {
     tft.fillScreen(TFT_BLACK);
     backlight_init();
 
-    if (!db_init()) {
-        // Non-fatal on purpose: still boot into the menu so the DB Check screen is
-        // reachable to diagnose what went wrong, rather than hard-halting blind.
-        Serial.println("[FATAL] db_init() failed — DB features unavailable this boot");
-    }
-    items_init();
-    users_import_from_sd();
-    users_backfill_admin_passwords();  // bootstraps a password for any admin that predates this schema
+    bool dbOk = boot_try_init_db();
+
     idle_timer_load_from_config();     // picks up a saved screensaver timeout, defaults to 3 min otherwise
+    screensaver_dim_load_from_config(); // picks up a saved screensaver dim level, defaults to 30% otherwise
+    backlight_normal_load_from_config(); // picks up a saved normal brightness, defaults to 100% otherwise
+    session_timer_load_from_config();  // picks up a saved auto-logout timeout, defaults to 5 min otherwise
     rtc_init();  // DS3231 -- safe no-op if not wired yet, see rtc.h
     webserver_init();  // AP mode; admin actions now gated behind a real login, see webserver.cpp
 
@@ -202,9 +264,29 @@ void setup() {
     header_init();
     buttons_init();
     build_idle_screen();
-    screen_splash_push();  // real boot flow: splash → (timeout) → IDLE
 
-    scanner.begin(9600, SERIAL_8N1, 17, 16);  // ESP RX=17 (← GM65 TX), ESP TX=16 (→ GM65 RX)
+    // This device does nothing useful without a working DB (no items, no users, no
+    // checkouts) -- rather than let a regular user wander into a Start screen that can't
+    // actually do anything, land on a dedicated blocking error screen instead. Its own
+    // Retry button re-runs boot_try_init_db() and falls through to the normal flow the
+    // moment it succeeds, no reboot needed.
+    //
+    // A DB that opens fine but has no admin row is a related dead end, not a healthy boot
+    // either -- Admin Login (and everything behind it, including the normal Add User flow)
+    // requires an existing admin badge to scan, so a blank/fresh SD card (or one that's
+    // lost every admin row some other way) can never reach Admin Login again on its own.
+    // screen_setup_wizard_push() is the escape hatch, 2026-09-14 -- replaces the old
+    // seed_users.csv SD bulk-import as this project's answer to "how do real people get
+    // onto a fresh device" for the admin-bootstrap case specifically.
+    if (!dbOk) {
+        screen_sd_error_push();
+    } else if (!users_has_admin()) {
+        screen_setup_wizard_push();
+    } else {
+        screen_splash_push();  // real boot flow: splash → (timeout) → IDLE
+    }
+
+    scanner.begin(9600, SERIAL_8N1, 16, 15);  // ESP RX=16 (← GM65 TX), ESP TX=15 (→ GM65 RX)
 
     // Force the known-good config every boot (see comment at gm65_write_reg() above).
     // Free real estate time-wise — the splash screen is already up for SPLASH_DURATION_MS
@@ -223,29 +305,51 @@ void setup() {
                                         // just a click on this unit's actual buzzer hardware,
                                         // confirmed via a real register readback, not a guess
     delay(30);
+
+    // Reconciles the scanner's real state (just forced to Induction/sensing, above)
+    // against whatever screen buttons_set_handlers() was called for earlier in setup()
+    // (splash, the setup wizard, or the SD/DB error screen, depending on boot outcome)
+    // -- those calls happened before scanner.begin() even ran, so they couldn't act on
+    // it yet. See buttons.h/buttons.cpp for the per-screen on/off system this feeds into.
+    buttons_scanner_ready();
 }
 
+// Arduino main loop -- polls buttons, ticks LVGL/idle/session timers, and reads any
+// pending scanner data, routing it to on_scan() unless something's actively armed to
+// intercept it (Scanner/GM65 Settings) or the active screen doesn't want scans at all.
 void loop() {
     buttons_poll();  // sample input first — don't let a slow render delay picking up a press
     lv_timer_handler();
     idle_timer_check();
+    session_timer_check();
 
     if (scanner.available()) {
         String code = scanner.readStringUntil('\n');
 
-        if (screen_gm65_test_capture(code.c_str(), code.length())) {
-            // GM65 Test screen is active and this looked like a command reply/ACK, not a
-            // real badge/UPC scan — consumed above (as a hex dump), don't fall through.
+        if (screen_gm65_test_capture(code.c_str(), code.length()) ||
+            screen_gm65_settings_capture(code.c_str(), code.length())) {
+            // Scanner or GM65 Settings screen is active and this looked like a command
+            // reply/ACK, not a real badge/UPC scan — consumed above, don't fall through.
         } else {
             code.trim();
             if (code.length() > 0) {
                 // Screensaver deliberately doesn't wake on a scan (only button presses) —
                 // see screen_screensaver_is_active(). Splash gets the same treatment so the
                 // boot-time GM65 config writes' ACK replies (setup(), above) don't get
-                // misrouted here as a bogus scan. Still drain the UART either way so bytes
-                // don't pile up.
-                if (screen_screensaver_is_active() || screen_splash_is_active()) {
-                    Serial.printf("SCAN: [%s] — ignored, splash/screensaver active\n", code.c_str());
+                // misrouted here as a bogus scan. The SD/DB error screen needs the identical
+                // guard for the identical reason — it runs instead of splash whenever the DB
+                // is broken, but the GM65 writes (and their ACK replies) happen unconditionally
+                // right after either one loads, so without this a stray ACK got read as an
+                // "unknown badge," which then routed through screen_blocked -> screen_idle_load()
+                // and escaped the error screen entirely (caught on real hardware 2026-09-14).
+                // The setup wizard needs the identical guard for the identical reason -- it
+                // also runs instead of splash (when the DB has no admin) and actively wants
+                // real scans, so an unguarded ACK here wouldn't just be misrouted, it'd get
+                // fed straight into the wizard's own badge-scan handling as if it were real.
+                // Still drain the UART either way so bytes don't pile up.
+                if (screen_screensaver_is_active() || screen_splash_is_active() ||
+                    screen_sd_error_is_active() || screen_setup_wizard_is_active()) {
+                    Serial.printf("SCAN: [%s] — ignored, splash/screensaver/error/setup screen active\n", code.c_str());
                 } else {
                     Serial.printf("SCAN: [%s]\n", code.c_str());
                     on_scan(code.c_str());

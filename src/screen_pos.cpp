@@ -13,6 +13,13 @@
 #include <sqlite3.h>
 #include <ctype.h>
 
+/*
+  Author--- LogicishDesigns
+  Date----- September 2026
+  Function- Implements the transaction screen declared in screen_pos.h -- one file,
+            four states (ST_LIST/ST_LOGOUT_CONFIRM/ST_MANUAL_ENTRY/ST_PAYMENT).
+*/
+
 // ── cart (RAM only — nothing touches the DB until Payment "Complete + Logout") ─────
 // Grouping key for merging an add into an existing line is (item_id, price_cents) —
 // currently always equivalent to just item_id, since every line (scanned or added via
@@ -54,6 +61,12 @@ static lv_obj_t *_cart_rows[MAX_CART_LINES];
 static int        _cart_cursor;
 static int        _cart_prev_cursor;
 
+// One-shot "scan didn't match anything" message -- set by screen_pos_on_scan() on an
+// unrecognized UPC, shown once at the top of the list by build_list_ui(), then cleared
+// immediately after rendering so it doesn't linger through the next unrelated rebuild
+// (adding/deleting a line, etc). Empty string = nothing to show.
+static char _scan_msg[48];
+
 // ST_MANUAL_ENTRY's catalog picker — GM65 isn't wired to the device yet, so this is also
 // how the whole flow gets exercised without hardware: pick items from the same list
 // Price Check uses instead of scanning them. Row-pool + partial-refresh pattern matches
@@ -69,6 +82,7 @@ static void build_logout_confirm_ui();
 static void build_manual_entry_ui();
 static void build_payment_ui();
 
+// Formats an integer cents value as "$X.XX".
 static void format_cents(int cents, char *out, size_t out_len) {
     snprintf(out, out_len, "$%d.%02d", cents / 100, cents % 100);
 }
@@ -119,6 +133,7 @@ static void add_line(int item_id, const char *name, int price_cents) {
     _cart_cursor = _cart_count - 1;
 }
 
+// Adds a catalog item to the cart (by scan or Item Lookup) and rebuilds the list if visible.
 static void add_catalog_item(const Item *it) {
     Serial.printf("[POS] Adding item %d: %s ($%d)\n", it->id, it->name, it->price_cents);
     add_line(it->id, it->name, it->price_cents);
@@ -130,6 +145,7 @@ static void add_catalog_item(const Item *it) {
 
 // ── ST_LIST callbacks ────────────────────────────────────────────────────────────
 
+// Highlights the currently-selected cart line.
 static void refresh_cart_cursor() {
     if (_cart_count == 0) return;
 
@@ -142,12 +158,14 @@ static void refresh_cart_cursor() {
     lv_obj_scroll_to_view(_cart_rows[_cart_cursor], LV_ANIM_OFF);
 }
 
+// Up: moves the cart selection up one line, wrapping.
 static void cb_cart_up() {
     if (_cart_count == 0) return;
     _cart_cursor = (_cart_cursor - 1 + _cart_count) % _cart_count;
     refresh_cart_cursor();
 }
 
+// Down: moves the cart selection down one line, wrapping.
 static void cb_cart_down() {
     if (_cart_count == 0) return;
     _cart_cursor = (_cart_cursor + 1) % _cart_count;
@@ -172,12 +190,14 @@ static void cb_delete_item() {
     build_list_ui();
 }
 
+// Back: opens the logout confirm.
 static void cb_logout() {
     _state = ST_LOGOUT_CONFIRM;
     lv_obj_clean(_content);
     build_logout_confirm_ui();
 }
 
+// Right: opens Item Lookup (Manual Entry).
 static void cb_manual_open() {
     _state = ST_MANUAL_ENTRY;
     _manual_cursor = 0;
@@ -187,6 +207,7 @@ static void cb_manual_open() {
     build_manual_entry_ui();
 }
 
+// Enter: proceeds to Payment, if the cart isn't empty.
 static void cb_finish() {
     if (_cart_count == 0) return;  // nothing to pay for
     _state = ST_PAYMENT;
@@ -197,12 +218,14 @@ static void cb_finish() {
 
 // ── ST_LOGOUT_CONFIRM callbacks ──────────────────────────────────────────────────
 
+// Enter: confirms logout, discarding the cart with no DB write.
 static void cb_logout_yes() {
     _cart_count  = 0;
     _total_cents = 0;
     screen_idle_load();  // no DB write — matches the state machine in snack_cart_pos.md
 }
 
+// Back: cancels the logout confirm, returning to the cart.
 static void cb_logout_no() {
     _state = ST_LIST;
     lv_obj_clean(_content);
@@ -211,15 +234,25 @@ static void cb_logout_no() {
 
 // ── ST_MANUAL_ENTRY callbacks ────────────────────────────────────────────────────
 
+// Left/Right jump ~a screenful at a time, same tuning rationale (and same wrap-at-the-
+// end behavior) as screen_browse.cpp's BROWSE_PAGE -- added 2026-09-15 alongside Browse's
+// own Up/Down -> Left/Right remap, so paging feels identical on both screens. Up/Down
+// stay bound to the single-row cursor here (unlike Browse, this screen has something to
+// select), so Left/Right were free to take over paging instead.
+#define MANUAL_PAGE 7
+
 // Only the first MAX_ITEMS rows are ever built (see build_manual_entry_ui()) — cursor math
 // must wrap against that same cap, not the raw DB count, or it indexes _manual_rows[] out
 // of bounds. (This is exactly what crashed the device 2026-08-25: items_count() outgrew
 // MAX_ITEMS once the real 53-item catalog replaced the old 10-item test data.)
+// include_hidden=false (2026-09-14) -- this is the checkout-time picker, a hidden item
+// can't be sold, see items.h.
 static int visible_count() {
-    int n = items_count();
+    int n = items_count(false);
     return n > MAX_ITEMS ? MAX_ITEMS : n;
 }
 
+// Highlights the currently-selected Item Lookup row.
 static void refresh_manual_cursor() {
     int n = visible_count();
     if (n == 0) return;
@@ -233,6 +266,7 @@ static void refresh_manual_cursor() {
     lv_obj_scroll_to_view(_manual_rows[_manual_cursor], LV_ANIM_OFF);
 }
 
+// Up: moves the Item Lookup selection up one row, wrapping.
 static void cb_manual_up() {
     int n = visible_count();
     if (n == 0) return;
@@ -240,6 +274,7 @@ static void cb_manual_up() {
     refresh_manual_cursor();
 }
 
+// Down: moves the Item Lookup selection down one row, wrapping.
 static void cb_manual_down() {
     int n = visible_count();
     if (n == 0) return;
@@ -247,14 +282,42 @@ static void cb_manual_down() {
     refresh_manual_cursor();
 }
 
+// Left: jumps the Item Lookup selection back ~a screenful, wrapping to the last row.
+static void cb_manual_page_left() {
+    int n = visible_count();
+    if (n == 0) return;
+    if (_manual_cursor <= 0) {
+        _manual_cursor = n - 1;
+    } else {
+        _manual_cursor -= MANUAL_PAGE;
+        if (_manual_cursor < 0) _manual_cursor = 0;
+    }
+    refresh_manual_cursor();
+}
+
+// Right: jumps the Item Lookup selection forward ~a screenful, wrapping to the first row.
+static void cb_manual_page_right() {
+    int n = visible_count();
+    if (n == 0) return;
+    if (_manual_cursor >= n - 1) {
+        _manual_cursor = 0;
+    } else {
+        _manual_cursor += MANUAL_PAGE;
+        if (_manual_cursor >= n) _manual_cursor = n - 1;
+    }
+    refresh_manual_cursor();
+}
+
+// Enter: adds the highlighted item to the cart and returns to the cart list.
 static void cb_manual_select() {
-    const Item *it = items_get(_manual_cursor);
+    const Item *it = items_get(_manual_cursor, false);
     if (it) add_line(it->id, it->name, it->price_cents);
     _state = ST_LIST;
     lv_obj_clean(_content);
     build_list_ui();
 }
 
+// Back: returns to the cart list without adding anything.
 static void cb_manual_back() {
     _state = ST_LIST;
     lv_obj_clean(_content);
@@ -263,6 +326,7 @@ static void cb_manual_back() {
 
 // ── ST_PAYMENT callbacks ─────────────────────────────────────────────────────────
 
+// Enter: saves the checkout to the DB and returns to IDLE. Cart is kept if the save fails.
 static void cb_pay_complete() {
     CheckoutLine lines[MAX_CART_LINES];
     for (int i = 0; i < _cart_count; i++) {
@@ -280,6 +344,7 @@ static void cb_pay_complete() {
     screen_idle_load();
 }
 
+// Back: cancels payment, discarding the cart with no DB write.
 static void cb_pay_cancel() {
     _cart_count  = 0;
     _total_cents = 0;
@@ -294,6 +359,7 @@ static void cb_pay_back_to_list() {
     build_list_ui();
 }
 
+// Right: cycles to the next enabled payment method.
 static void cb_pay_other() {
     _payment_method_index++;  // build_payment_ui() wraps this against the real row count
     lv_obj_clean(_content);
@@ -302,6 +368,7 @@ static void cb_pay_other() {
 
 // ── UI builders ───────────────────────────────────────────────────────────────────
 
+// Builds the ST_LIST (cart) UI.
 static void build_list_ui() {
     // Explicit height is a placeholder — flex_grow(1) takes over main-axis sizing and
     // expands this to fill whatever space is left after the total bar + footer below,
@@ -316,7 +383,18 @@ static void build_list_ui() {
     lv_obj_set_layout(list, LV_LAYOUT_FLEX);
     lv_obj_set_flex_flow(list, LV_FLEX_FLOW_COLUMN);
 
-    if (_cart_count == 0) {
+    if (_scan_msg[0] != '\0') {
+        // Shown regardless of cart state -- a scan can fail whether the cart is empty or
+        // already has lines in it, unlike the plain empty-cart hint below.
+        lv_obj_t *msg = lv_label_create(list);
+        lv_label_set_text(msg, _scan_msg);
+        lv_label_set_long_mode(msg, LV_LABEL_LONG_WRAP);
+        lv_obj_set_width(msg, LV_PCT(100));
+        lv_obj_set_style_text_color(msg, lv_color_hex(C_RED), LV_PART_MAIN);
+        lv_obj_set_style_text_font(msg, &lv_font_montserrat_16, LV_PART_MAIN);
+        lv_obj_set_style_text_align(msg, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+        _scan_msg[0] = '\0';  // one-shot -- see the declaration comment
+    } else if (_cart_count == 0) {
         lv_obj_t *hint = lv_label_create(list);
         lv_label_set_text(hint, "Scan an item to begin");
         lv_label_set_long_mode(hint, LV_LABEL_LONG_WRAP);
@@ -400,9 +478,12 @@ static void build_list_ui() {
     h.right = cb_manual_open;
     h.enter = cb_finish;
     h.back  = cb_logout;
+    h.wantsScanner = true;  // scanning another item's UPC adds it to the cart -- see
+                             // screen_pos_on_scan()'s ST_LIST-only gate above
     buttons_set_handlers(h);
 }
 
+// Builds the ST_LOGOUT_CONFIRM UI.
 static void build_logout_confirm_ui() {
     lv_obj_t *prompt = lv_label_create(_content);
     lv_label_set_text(prompt, "Logout and Cancel\nTransaction?");
@@ -427,9 +508,10 @@ static void build_logout_confirm_ui() {
     buttons_set_handlers(h);
 }
 
+// Builds the ST_MANUAL_ENTRY (Item Lookup) UI.
 static void build_manual_entry_ui() {
     lv_obj_t *hint = lv_label_create(_content);
-    lv_label_set_text(hint, "Item Lookup — select an item to add:");
+    lv_label_set_text(hint, "Item Lookup - select an item to add:");
     lv_obj_set_style_text_color(hint, lv_color_hex(C_TEXT), LV_PART_MAIN);
     lv_obj_set_style_text_font(hint, &lv_font_montserrat_16, LV_PART_MAIN);
     lv_obj_set_width(hint, LV_PCT(100));
@@ -445,9 +527,9 @@ static void build_manual_entry_ui() {
     lv_obj_set_layout(list, LV_LAYOUT_FLEX);
     lv_obj_set_flex_flow(list, LV_FLEX_FLOW_COLUMN);
 
-    int n = items_count();
+    int n = items_count(false);
     for (int i = 0; i < n && i < MAX_ITEMS; i++) {
-        const Item *it = items_get(i);
+        const Item *it = items_get(i, false);
 
         lv_obj_t *row = lv_obj_create(list);
         lv_obj_set_size(row, LV_PCT(100), LV_SIZE_CONTENT);
@@ -463,13 +545,16 @@ static void build_manual_entry_ui() {
         lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
         _manual_rows[i] = row;
 
+        // it can be null if the underlying query failed -- see screen_inventory.cpp's
+        // matching guard for why this isn't just theoretical caution.
         lv_obj_t *name_lbl = lv_label_create(row);
-        lv_label_set_text(name_lbl, it->name);
-        lv_obj_set_style_text_color(name_lbl, lv_color_hex(C_TEXT), LV_PART_MAIN);
+        lv_label_set_text(name_lbl, it ? it->name : "(error loading item)");
+        lv_obj_set_style_text_color(name_lbl, it ? lv_color_hex(C_TEXT) : lv_color_hex(C_RED), LV_PART_MAIN);
         lv_obj_set_style_text_font(name_lbl, &lv_font_montserrat_16, LV_PART_MAIN);
 
         char price_buf[12];
-        format_cents(it->price_cents, price_buf, sizeof(price_buf));
+        if (it) format_cents(it->price_cents, price_buf, sizeof(price_buf));
+        else    snprintf(price_buf, sizeof(price_buf), "--");
         lv_obj_t *price_lbl = lv_label_create(row);
         lv_label_set_text(price_lbl, price_buf);
         lv_obj_set_style_text_color(price_lbl, lv_color_hex(C_GREEN), LV_PART_MAIN);
@@ -477,9 +562,10 @@ static void build_manual_entry_ui() {
     }
 
     lv_obj_t *legend = ui_legend(_content);
-    char move_lbl[24];
-    snprintf(move_lbl, sizeof(move_lbl), "%s%s Move", LV_SYMBOL_UP, LV_SYMBOL_DOWN);
-    ui_legend_row(legend, move_lbl, lv_color_hex(C_YELLOW), "", lv_color_hex(C_TEXT));
+    char move_lbl[24], page_lbl[24];
+    snprintf(move_lbl, sizeof(move_lbl), "Move %s%s", LV_SYMBOL_UP, LV_SYMBOL_DOWN);
+    snprintf(page_lbl, sizeof(page_lbl), "Page %s%s", LV_SYMBOL_LEFT, LV_SYMBOL_RIGHT);
+    ui_legend_row(legend, move_lbl, lv_color_hex(C_YELLOW), page_lbl, lv_color_hex(C_YELLOW));
     ui_legend_row(legend, "Add", lv_color_hex(C_GREEN), "Back", lv_color_hex(C_RED));
 
     refresh_manual_cursor();
@@ -487,6 +573,8 @@ static void build_manual_entry_ui() {
     ButtonHandlers h;
     h.up    = cb_manual_up;
     h.down  = cb_manual_down;
+    h.left  = cb_manual_page_left;
+    h.right = cb_manual_page_right;
     h.enter = cb_manual_select;
     h.back  = cb_manual_back;
     buttons_set_handlers(h);
@@ -497,6 +585,7 @@ static void build_manual_entry_ui() {
 // reasoning. RIGHT on the Payment screen cycles through whichever methods are enabled;
 // venmo is always shown first (see ORDER BY below) regardless of how many others exist.
 
+// Returns how many payment_methods rows are enabled.
 static int count_enabled_payment_methods() {
     sqlite3_stmt *stmt;
     int count = 0;
@@ -507,6 +596,8 @@ static int count_enabled_payment_methods() {
     return count;
 }
 
+// Reads the index'th enabled payment method (venmo always sorted first). Returns true if
+// it has a real handle set.
 static bool get_payment_method_at(int index, char *method, size_t method_len,
                                    char *display_name, size_t display_name_len,
                                    char *handle, size_t handle_len) {
@@ -552,6 +643,8 @@ static int predict_next_checkout_id() {
     return next_id;
 }
 
+// Builds the ST_PAYMENT UI -- a Venmo QR code, a plain-text fallback for another method,
+// or a "not set up" warning, plus the total and footer.
 static void build_payment_ui() {
     int method_count = count_enabled_payment_methods();
     if (method_count > 0 && _payment_method_index >= method_count) _payment_method_index = 0;
@@ -674,6 +767,8 @@ static void build_payment_ui() {
 
 // ── public ────────────────────────────────────────────────────────────────────────
 
+// Consumes a scan while this screen is active -- adds a known item to the cart in
+// ST_LIST; swallowed (ignored) in every other sub-state.
 bool screen_pos_on_scan(const char *upc) {
     if (!_scr || lv_scr_act() != _scr) return false;
     if (_state != ST_LIST) return true;  // consumed but ignored mid sub-screen
@@ -683,10 +778,16 @@ bool screen_pos_on_scan(const char *upc) {
         add_catalog_item(it);
     } else {
         Serial.printf("[POS] Unknown item UPC: %s\n", upc);
+        // Previously silent -- a real scan that just doesn't match anything looked
+        // identical to no scan happening at all. See _scan_msg's declaration comment.
+        snprintf(_scan_msg, sizeof(_scan_msg), "Item not found.\nRescan or use Lookup.");
+        lv_obj_clean(_content);
+        build_list_ui();
     }
     return true;
 }
 
+// Loads the transaction screen for user_id, always starting with a fresh empty cart.
 void screen_pos_push(int user_id) {
     _user_id     = user_id;
     _cart_count  = 0;
@@ -708,6 +809,12 @@ void screen_pos_push(int user_id) {
         lv_obj_set_style_border_width(_content, 0, LV_PART_MAIN);
         lv_obj_set_style_pad_hor(_content, 12, LV_PART_MAIN);
         lv_obj_set_style_pad_ver(_content, 12, LV_PART_MAIN);
+        // The footer legend is this flex column's last child, so pad_ver's bottom inset
+        // was also its distance from the true screen edge -- overridden separately to
+        // match the ~6px margin every explicitly-aligned legend elsewhere uses (see
+        // screen_item_edit.cpp's identical fix). Covers all four of this screen's states
+        // (ST_LIST/LOGOUT_CONFIRM/MANUAL_ENTRY/PAYMENT) since they share this one _content.
+        lv_obj_set_style_pad_bottom(_content, 6, LV_PART_MAIN);
         lv_obj_set_style_pad_row(_content, 8, LV_PART_MAIN);
         lv_obj_set_layout(_content, LV_LAYOUT_FLEX);
         lv_obj_set_flex_flow(_content, LV_FLEX_FLOW_COLUMN);

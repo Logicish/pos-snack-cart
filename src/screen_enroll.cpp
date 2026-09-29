@@ -10,6 +10,14 @@
 #include <Arduino.h>
 #include <string.h>
 
+/*
+  Author--- LogicishDesigns
+  Date----- September 2026
+  Function- Implements the enrollment widget declared in screen_enroll.h -- four
+            states: ST_FIRST/ST_LAST (name wheel), ST_CONFIRM (name summary),
+            ST_SCAN (re-scan to confirm the badge before saving).
+*/
+
 // ── character set ─────────────────────────────────────────────────────────────
 // Indices: 0-25 = A-Z, 26 = space, 27 = dash
 static const char CHARSET[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ -";
@@ -36,6 +44,7 @@ static lv_obj_t *_scan_status_lbl;
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
+// Reads one name-wheel row into a trimmed string.
 static void get_name(uint8_t row, char *out) {
     int last_real = -1;
     for (int i = 0; i < NAME_LEN; i++) {
@@ -46,6 +55,7 @@ static void get_name(uint8_t row, char *out) {
     out[last_real + 1] = '\0';
 }
 
+// True if the given name-wheel row has at least one real character typed.
 static bool name_valid(uint8_t row) {
     char buf[NAME_LEN + 1];
     get_name(row, buf);
@@ -93,6 +103,7 @@ static void build_scan_ui();
 
 // ── button callbacks ──────────────────────────────────────────────────────────
 
+// Left: moves the cursor left within the active row.
 static void cb_left() {
     if (_cursor > 0) {
         uint8_t old = _cursor;
@@ -102,6 +113,7 @@ static void cb_left() {
     }
 }
 
+// Right: moves the cursor right within the active row.
 static void cb_right() {
     if (_cursor < NAME_LEN - 1) {
         uint8_t old = _cursor;
@@ -111,16 +123,19 @@ static void cb_right() {
     }
 }
 
+// Up: cycles the letter under the cursor forward.
 static void cb_up() {
     _idx[_active_row][_cursor] = (_idx[_active_row][_cursor] + 1) % CHARSET_LEN;
     refresh_cell(_active_row, _cursor);
 }
 
+// Down: cycles the letter under the cursor backward.
 static void cb_down() {
     _idx[_active_row][_cursor] = (_idx[_active_row][_cursor] + CHARSET_LEN - 1) % CHARSET_LEN;
     refresh_cell(_active_row, _cursor);
 }
 
+// Enter: advances first name -> last name -> confirm.
 static void cb_next() {
     if (_active_row == 0) {
         if (!name_valid(0)) return;
@@ -137,6 +152,7 @@ static void cb_next() {
     }
 }
 
+// Back: steps back a field, or cancels to IDLE from the first field.
 static void cb_back() {
     if (_active_row == 1) {
         _active_row = 0;
@@ -147,6 +163,7 @@ static void cb_back() {
     }
 }
 
+// Enter: proceeds to the re-scan confirm step.
 static void cb_yes() {
     _state = ST_SCAN;
     lv_obj_clean(_content);
@@ -155,6 +172,7 @@ static void cb_yes() {
     build_scan_ui();
 }
 
+// Back: returns to the confirm step.
 static void cb_back_from_scan() {
     _state = ST_CONFIRM;
     lv_obj_clean(_content);
@@ -163,6 +181,7 @@ static void cb_back_from_scan() {
     build_confirm_ui();
 }
 
+// Back: returns to editing the last name.
 static void cb_no() {
     _state = ST_LAST;
     _active_row = 1;
@@ -175,6 +194,7 @@ static void cb_no() {
 
 // ── UI builders ───────────────────────────────────────────────────────────────
 
+// Builds one "Enter First/Last Name:" hint label.
 static lv_obj_t *make_section_label(lv_obj_t *parent, const char *text) {
     lv_obj_t *lbl = lv_label_create(parent);
     lv_label_set_text(lbl, text);
@@ -184,6 +204,7 @@ static lv_obj_t *make_section_label(lv_obj_t *parent, const char *text) {
     return lbl;
 }
 
+// Builds one row of character cells for the name wheel.
 static void build_char_row(lv_obj_t *parent, uint8_t row) {
     lv_obj_t *row_cont = lv_obj_create(parent);
     lv_obj_set_size(row_cont, LV_PCT(100), LV_SIZE_CONTENT);
@@ -214,6 +235,7 @@ static void build_char_row(lv_obj_t *parent, uint8_t row) {
     }
 }
 
+// Builds the ST_FIRST/ST_LAST (name wheel) UI.
 static void build_input_ui() {
     make_section_label(_content, "Enter First Name:");
     build_char_row(_content, 0);
@@ -255,6 +277,7 @@ static void build_input_ui() {
     buttons_set_handlers(h);
 }
 
+// Builds the ST_CONFIRM UI.
 static void build_confirm_ui() {
     char first[NAME_LEN + 1], last[NAME_LEN + 1];
     get_name(0, first);
@@ -293,6 +316,7 @@ static void build_confirm_ui() {
     buttons_set_handlers(h);
 }
 
+// Builds the ST_SCAN (re-scan-confirm) UI.
 static void build_scan_ui() {
     _scan_status_lbl = nullptr;
 
@@ -321,11 +345,13 @@ static void build_scan_ui() {
 
     ButtonHandlers h;
     h.back = cb_back_from_scan;
+    h.wantsScanner = true;  // waiting for the same badge again, to confirm it
     buttons_set_handlers(h);
 }
 
 // ── public ────────────────────────────────────────────────────────────────────
 
+// Consumes the ST_SCAN re-scan -- creates the user on a matching badge, else shows a mismatch.
 bool screen_enroll_on_scan(const char *badge_id) {
     if (_state != ST_SCAN || !_scr || lv_scr_act() != _scr) return false;
 
@@ -336,7 +362,7 @@ bool screen_enroll_on_scan(const char *badge_id) {
         int user_id = users_create(_badge_id, first, last);
         if (user_id < 0) {
             Serial.println("[ENROLL] user store full");
-            if (_scan_status_lbl) lv_label_set_text(_scan_status_lbl, "Save failed — try again");
+            if (_scan_status_lbl) lv_label_set_text(_scan_status_lbl, "Save failed - try again");
             return true;
         }
         Serial.printf("[ENROLL] Created user %d: %s %s\n", user_id, first, last);
@@ -349,11 +375,12 @@ bool screen_enroll_on_scan(const char *badge_id) {
         screen_add_user_push();
     } else {
         Serial.printf("[ENROLL] Badge mismatch during confirm scan\n");
-        if (_scan_status_lbl) lv_label_set_text(_scan_status_lbl, "Wrong badge — try again");
+        if (_scan_status_lbl) lv_label_set_text(_scan_status_lbl, "Wrong badge - try again");
     }
     return true;
 }
 
+// Loads the enrollment widget for the given (already-confirmed-unenrolled) badge.
 void screen_enroll_push(const char *badge_id) {
     strncpy(_badge_id, badge_id, sizeof(_badge_id) - 1);
     _badge_id[sizeof(_badge_id) - 1] = '\0';
@@ -383,6 +410,11 @@ void screen_enroll_push(const char *badge_id) {
         lv_obj_set_style_border_width(_content, 0, LV_PART_MAIN);
         lv_obj_set_style_pad_hor(_content, 12, LV_PART_MAIN);
         lv_obj_set_style_pad_ver(_content, 12, LV_PART_MAIN);
+        // The footer legend is this flex column's last child, so pad_ver's bottom inset
+        // was also its distance from the true screen edge -- overridden separately to
+        // match the ~6px margin every explicitly-aligned legend elsewhere uses (see
+        // screen_item_edit.cpp's identical fix).
+        lv_obj_set_style_pad_bottom(_content, 6, LV_PART_MAIN);
         lv_obj_set_style_pad_row(_content, 8, LV_PART_MAIN);
         lv_obj_set_layout(_content, LV_LAYOUT_FLEX);
         lv_obj_set_flex_flow(_content, LV_FLEX_FLOW_COLUMN);

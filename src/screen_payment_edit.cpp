@@ -1,5 +1,5 @@
-#include "screen_venmo_settings.h"
-#include "screen_settings.h"
+#include "screen_payment_edit.h"
+#include "screen_payment_menu.h"
 #include "header.h"
 #include "theme.h"
 #include "buttons.h"
@@ -11,6 +11,13 @@
 #include <string.h>
 #include <ctype.h>
 
+/*
+  Author--- LogicishDesigns
+  Date----- September 2026
+  Function- Implements the generic payment-method editor declared in
+            screen_payment_edit.h -- three states: ST_HANDLE, ST_NAME, ST_CONFIRM.
+*/
+
 // Same wrapped-two-row wheel geometry as screen_add_item.cpp's item-name field (11 + 7 =
 // 18 chars, cursor auto-crosses the row boundary) — proven layout, reused for two fields
 // in sequence here (handle, then owner display name) instead of one.
@@ -19,10 +26,10 @@
 #define FIELD_LEN 11  // widest row -- array width
 #define TOTAL_LEN (ROW0_LEN + ROW1_LEN)
 
-// Handle charset includes digits/underscore (real Venmo handles commonly have both, e.g.
+// Handle charset includes digits/underscore (real handles commonly have both, e.g.
 // "jane-doe21") — unlike the letters-only wheels used for people/item names elsewhere.
-// Venmo's own matching is case-insensitive, so keeping this uppercase-only (like every
-// other wheel in this codebase) doesn't lose anything real.
+// Matching is case-insensitive on every payment app this targets, so keeping this
+// uppercase-only (like every other wheel in this codebase) doesn't lose anything real.
 static const char HANDLE_CHARSET[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_";
 #define HANDLE_CHARSET_LEN 38
 #define HANDLE_BLANK_IDX   36  // '-'
@@ -31,11 +38,17 @@ static const char NAME_CHARSET[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ -";
 #define NAME_CHARSET_LEN 28
 #define NAME_BLANK_IDX   27  // '-'
 
-typedef enum { ST_HANDLE, ST_NAME, ST_CONFIRM } VenmoState;
+typedef enum { ST_HANDLE, ST_NAME, ST_CONFIRM } PaymentEditState;
 
-static lv_obj_t  *_scr;
-static lv_obj_t  *_content;
-static VenmoState _state;
+static lv_obj_t        *_scr;
+static lv_obj_t        *_content;
+static PaymentEditState _state;
+
+// Which payment_methods row this instance of the screen is editing — set fresh each time
+// screen_payment_edit_push() is called, since the same screen/widgets are reused for
+// Venmo/Zelle/Cashapp rather than building three near-identical screens.
+static char _method[16];
+static char _label[16];
 
 // Two persistent field buffers (handle survives while editing name and vice versa, so
 // Back-a-field doesn't lose what was typed) -- _idx points at whichever is active.
@@ -58,8 +71,10 @@ static void build_handle_ui();
 static void build_name_ui();
 static void build_confirm_ui();
 
+// Returns how many cells the given wheel row has.
 static inline uint8_t row_len(uint8_t row) { return row == 0 ? ROW0_LEN : ROW1_LEN; }
 
+// Clears the content area between states.
 static void clear_content() {
     lv_obj_clean(_content);
     memset(_cell,     0, sizeof(_cell));
@@ -104,6 +119,7 @@ static void get_field(char *out, size_t out_len) {
     out[out_len - 1] = '\0';
 }
 
+// Redraws every wheel cell, highlighting the cursor cell.
 static void refresh_wheel_cells() {
     for (int row = 0; row < 2; row++) {
         for (int col = 0; col < row_len(row); col++) {
@@ -124,6 +140,7 @@ static void refresh_wheel_cells() {
     }
 }
 
+// Left: moves the cursor left, crossing onto the previous row at the boundary.
 static void cb_wheel_left() {
     if (_wcursor > 0) {
         _wcursor--;
@@ -136,6 +153,7 @@ static void cb_wheel_left() {
     refresh_wheel_cells();
 }
 
+// Right: moves the cursor right, crossing onto the next row at the boundary.
 static void cb_wheel_right() {
     if (_wcursor < row_len(_wrow) - 1) {
         _wcursor++;
@@ -148,16 +166,19 @@ static void cb_wheel_right() {
     refresh_wheel_cells();
 }
 
+// Up: cycles the letter under the cursor forward.
 static void cb_wheel_up() {
     _idx[_wrow][_wcursor] = (int8_t)((_idx[_wrow][_wcursor] + 1) % _charset_len);
     refresh_wheel_cells();
 }
 
+// Down: cycles the letter under the cursor backward.
 static void cb_wheel_down() {
     _idx[_wrow][_wcursor] = (int8_t)((_idx[_wrow][_wcursor] + _charset_len - 1) % _charset_len);
     refresh_wheel_cells();
 }
 
+// Builds one row of character cells for whichever field is active.
 static void build_wheel_row(lv_obj_t *parent, uint8_t row) {
     lv_obj_t *row_cont = lv_obj_create(parent);
     lv_obj_set_size(row_cont, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
@@ -191,6 +212,7 @@ static void build_wheel_row(lv_obj_t *parent, uint8_t row) {
 
 // ============ ST_HANDLE ============
 
+// Enter: saves the handle field and proceeds to the owner-name field.
 static void cb_handle_next() {
     get_field(_handle_buf, sizeof(_handle_buf));
     _state = ST_NAME;
@@ -204,12 +226,15 @@ static void cb_handle_next() {
 }
 
 static void cb_handle_back() {
-    screen_settings_push();  // first field -- Back cancels the whole editor
+    screen_payment_menu_push();  // first field -- Back cancels the whole editor
 }
 
+// Builds the ST_HANDLE entry UI.
 static void build_handle_ui() {
     lv_obj_t *hint = lv_label_create(_content);
-    lv_label_set_text(hint, "Venmo handle:");
+    char hint_buf[32];
+    snprintf(hint_buf, sizeof(hint_buf), "%s handle:", _label);
+    lv_label_set_text(hint, hint_buf);
     lv_obj_set_style_text_color(hint, lv_color_hex(C_TEXT), LV_PART_MAIN);
     lv_obj_set_style_text_font(hint, &lv_font_montserrat_16, LV_PART_MAIN);
     lv_obj_set_width(hint, LV_PCT(100));
@@ -244,6 +269,7 @@ static void build_handle_ui() {
 
 // ============ ST_NAME (owner display name) ============
 
+// Enter: saves the owner-name field and proceeds to confirm.
 static void cb_name_next() {
     get_field(_owner_buf, sizeof(_owner_buf));
     _state = ST_CONFIRM;
@@ -264,6 +290,7 @@ static void cb_name_back() {
     build_handle_ui();
 }
 
+// Builds the ST_NAME (owner display name) UI.
 static void build_name_ui() {
     lv_obj_t *hint = lv_label_create(_content);
     lv_label_set_long_mode(hint, LV_LABEL_LONG_WRAP);
@@ -304,38 +331,45 @@ static void build_name_ui() {
 
 // Same check-then-branch UPSERT workaround as screen_admin_tools.cpp's upsert_venmo() and
 // webserver.cpp's handle_admin_settings() -- `ON CONFLICT...DO UPDATE` silently no-ops on
-// this SQLite build (see project memory: feedback-no-upsert-syntax).
-static void save_venmo(const char *handle, const char *owner) {
+// this SQLite build (see project memory: feedback-no-upsert-syntax). `_method` picks which
+// payment_methods row this writes to -- previously always 'venmo', parameterized 2026-09-14
+// so the same function serves Venmo/Zelle/Cashapp (and any future method) alike.
+static void save_payment_info(const char *handle, const char *owner) {
     sqlite3 *db = db_handle();
     if (!db) return;
 
     sqlite3_stmt *stmt;
     bool exists = false;
-    if (sqlite3_prepare_v2(db, "SELECT 1 FROM payment_methods WHERE method='venmo';", -1, &stmt, nullptr) == SQLITE_OK) {
+    if (sqlite3_prepare_v2(db, "SELECT 1 FROM payment_methods WHERE method=?;", -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_text(stmt, 1, _method, -1, SQLITE_TRANSIENT);
         exists = sqlite3_step(stmt) == SQLITE_ROW;
         sqlite3_finalize(stmt);
     }
 
     if (exists) {
-        if (sqlite3_prepare_v2(db, "UPDATE payment_methods SET display_name=?, handle=?, enabled=1 WHERE method='venmo';", -1, &stmt, nullptr) == SQLITE_OK) {
+        if (sqlite3_prepare_v2(db, "UPDATE payment_methods SET display_name=?, handle=?, enabled=1 WHERE method=?;", -1, &stmt, nullptr) == SQLITE_OK) {
             sqlite3_bind_text(stmt, 1, owner, -1, SQLITE_TRANSIENT);
             sqlite3_bind_text(stmt, 2, handle, -1, SQLITE_TRANSIENT);
+            sqlite3_bind_text(stmt, 3, _method, -1, SQLITE_TRANSIENT);
             sqlite3_step(stmt);
             sqlite3_finalize(stmt);
         }
-    } else if (sqlite3_prepare_v2(db, "INSERT INTO payment_methods (method, display_name, handle, enabled) VALUES ('venmo', ?, ?, 1);", -1, &stmt, nullptr) == SQLITE_OK) {
-        sqlite3_bind_text(stmt, 1, owner, -1, SQLITE_TRANSIENT);
-        sqlite3_bind_text(stmt, 2, handle, -1, SQLITE_TRANSIENT);
+    } else if (sqlite3_prepare_v2(db, "INSERT INTO payment_methods (method, display_name, handle, enabled) VALUES (?, ?, ?, 1);", -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_text(stmt, 1, _method, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 2, owner, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 3, handle, -1, SQLITE_TRANSIENT);
         sqlite3_step(stmt);
         sqlite3_finalize(stmt);
     }
 }
 
+// Enter: writes the handle+owner name to the DB and returns to the Payment Info submenu.
 static void cb_confirm_save() {
-    save_venmo(_handle_buf, _owner_buf);
-    screen_settings_push();
+    save_payment_info(_handle_buf, _owner_buf);
+    screen_payment_menu_push();
 }
 
+// Back: returns to editing the owner name.
 static void cb_confirm_back() {
     _state = ST_NAME;
     _idx = _idx_name;
@@ -347,6 +381,7 @@ static void cb_confirm_back() {
     build_name_ui();
 }
 
+// Builds the ST_CONFIRM UI.
 static void build_confirm_ui() {
     lv_obj_t *prompt = lv_label_create(_content);
     lv_label_set_text(prompt, "Save this payment info?");
@@ -384,7 +419,13 @@ static void build_confirm_ui() {
 
 // ============ public ============
 
-void screen_venmo_settings_push() {
+// Loads the editor for the given payment method, prefilled from its DB row.
+void screen_payment_edit_push(const char *method, const char *display_label) {
+    strncpy(_method, method, sizeof(_method) - 1);
+    _method[sizeof(_method) - 1] = '\0';
+    strncpy(_label, display_label, sizeof(_label) - 1);
+    _label[sizeof(_label) - 1] = '\0';
+
     _state = ST_HANDLE;
 
     if (!_scr) {
@@ -401,6 +442,11 @@ void screen_venmo_settings_push() {
         lv_obj_set_style_border_width(_content, 0, LV_PART_MAIN);
         lv_obj_set_style_pad_hor(_content, 12, LV_PART_MAIN);
         lv_obj_set_style_pad_ver(_content, 12, LV_PART_MAIN);
+        // The footer legend is this flex column's last child, so pad_ver's bottom inset
+        // was also its distance from the true screen edge -- overridden separately to
+        // match the ~6px margin every explicitly-aligned legend elsewhere uses (see
+        // screen_item_edit.cpp's identical fix).
+        lv_obj_set_style_pad_bottom(_content, 6, LV_PART_MAIN);
         lv_obj_set_style_pad_row(_content, 8, LV_PART_MAIN);
         lv_obj_set_layout(_content, LV_LAYOUT_FLEX);
         lv_obj_set_flex_flow(_content, LV_FLEX_FLOW_COLUMN);
@@ -411,11 +457,12 @@ void screen_venmo_settings_push() {
     }
 
     // Prefill both fields from whatever's already in payment_methods (blank if the DB
-    // isn't available yet or nothing's been set -- the wheels just start empty).
+    // isn't available yet, or this method has no row yet -- the wheels just start empty).
     char handle[64] = "", owner[64] = "";
     if (db_handle()) {
         sqlite3_stmt *stmt;
-        if (sqlite3_prepare_v2(db_handle(), "SELECT display_name, handle FROM payment_methods WHERE method='venmo';", -1, &stmt, nullptr) == SQLITE_OK) {
+        if (sqlite3_prepare_v2(db_handle(), "SELECT display_name, handle FROM payment_methods WHERE method=?;", -1, &stmt, nullptr) == SQLITE_OK) {
+            sqlite3_bind_text(stmt, 1, _method, -1, SQLITE_TRANSIENT);
             if (sqlite3_step(stmt) == SQLITE_ROW) {
                 const unsigned char *dn = sqlite3_column_text(stmt, 0);
                 const unsigned char *hd = sqlite3_column_text(stmt, 1);
@@ -436,8 +483,13 @@ void screen_venmo_settings_push() {
     _wrow = 0;
     _wcursor = 0;
 
+    // Just the method name ("VENMO"), not "VENMO PAYMENT INFO" -- per explicit direction
+    // 2026-09-14, matches how the Payment Info submenu rows are already named.
+    char title[16];
+    snprintf(title, sizeof(title), "%s", _label);
+    for (char *p = title; *p; p++) *p = (char)toupper((unsigned char)*p);
     header_set_visible(true);
-    header_set_title("VENMO PAYMENT INFO");
+    header_set_title(title);
     build_handle_ui();
 
     lv_scr_load(_scr);

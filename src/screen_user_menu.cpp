@@ -8,6 +8,12 @@
 #include <lvgl.h>
 #include <Arduino.h>
 
+/*
+  Author--- LogicishDesigns
+  Date----- September 2026
+  Function- Implements the Users submenu declared in screen_user_menu.h.
+*/
+
 #define MENU_COUNT 2
 #define FOOTER_H   52
 
@@ -21,6 +27,7 @@ static const char *MENU_LABELS[MENU_COUNT] = {
     "2. Edit Users",
 };
 
+// Highlights the currently-selected row.
 static void refresh_cursor() {
     if (_prev_cursor >= 0 && _prev_cursor != _cursor) {
         lv_obj_set_style_bg_opa(_rows[_prev_cursor], LV_OPA_TRANSP, LV_PART_MAIN);
@@ -30,20 +37,24 @@ static void refresh_cursor() {
     lv_obj_scroll_to_view(_rows[_cursor], LV_ANIM_OFF);
 }
 
+// Up: moves the selection up one row, wrapping.
 static void cb_up() {
     _cursor = (_cursor - 1 + MENU_COUNT) % MENU_COUNT;
     refresh_cursor();
 }
 
+// Down: moves the selection down one row, wrapping.
 static void cb_down() {
     _cursor = (_cursor + 1) % MENU_COUNT;
     refresh_cursor();
 }
 
+// Back returns to the main Admin Menu.
 static void cb_back() {
     screen_menu_push();  // up one level to the main Admin Menu, not a full logout
 }
 
+// Enter opens whichever screen the selected row names.
 static void cb_enter() {
     switch (_cursor) {
         case 0: screen_add_user_push();  break;
@@ -51,6 +62,7 @@ static void cb_enter() {
     }
 }
 
+// Loads the Users submenu.
 void screen_user_menu_push() {
     _cursor = 0;
 

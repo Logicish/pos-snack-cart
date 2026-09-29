@@ -10,6 +10,14 @@
 #include <time.h>
 #include <sys/time.h>
 
+/*
+  Author--- LogicishDesigns
+  Date----- September 2026
+  Function- Implements the Set Clock screen declared in screen_set_clock.h -- five
+            adjustable rows (Y/M/D/H/M), Enter applies via settimeofday() + syncs
+            the DS3231.
+*/
+
 enum Row { ROW_YEAR, ROW_MONTH, ROW_DAY, ROW_HOUR, ROW_MINUTE, ROW_COUNT };
 
 static lv_obj_t *_scr;
@@ -23,6 +31,7 @@ static int        _row_cursor;
 // deliberate simplification for a manual stopgap screen, not worth a date library here.
 static int _year, _month, _day, _hour, _minute;
 
+// Redraws all 5 value labels from the current _year/_month/... state.
 static void refresh_values() {
     char buf[8];
     snprintf(buf, sizeof(buf), "%04d", _year);   lv_label_set_text(_val_lbls[ROW_YEAR],   buf);
@@ -32,22 +41,26 @@ static void refresh_values() {
     snprintf(buf, sizeof(buf), "%02d", _minute); lv_label_set_text(_val_lbls[ROW_MINUTE], buf);
 }
 
+// Highlights the currently-selected row.
 static void refresh_row_highlight() {
     for (int i = 0; i < ROW_COUNT; i++) {
         lv_obj_set_style_bg_opa(_rows[i], i == _row_cursor ? LV_OPA_30 : LV_OPA_TRANSP, LV_PART_MAIN);
     }
 }
 
+// Up: moves the selection to the previous row, wrapping.
 static void cb_row_prev() {
     _row_cursor = (_row_cursor - 1 + ROW_COUNT) % ROW_COUNT;
     refresh_row_highlight();
 }
 
+// Down: moves the selection to the next row, wrapping.
 static void cb_row_next() {
     _row_cursor = (_row_cursor + 1) % ROW_COUNT;
     refresh_row_highlight();
 }
 
+// Adjusts the currently-selected row's value by delta, wrapping to its valid range.
 static void adjust(int delta) {
     switch (_row_cursor) {
         case ROW_YEAR:
@@ -79,8 +92,8 @@ static void adjust(int delta) {
     refresh_values();
 }
 
-static void cb_adjust_down() { adjust(-1); }
-static void cb_adjust_up()   { adjust(1);  }
+static void cb_adjust_down() { adjust(-1); }  // Left: decrement the selected row
+static void cb_adjust_up()   { adjust(1);  }  // Right: increment the selected row
 
 // No timezone handling anywhere in this codebase (see webserver.cpp's format_epoch,
 // checkouts.cpp) -- mktime() interprets the struct as local time under the C library's
@@ -108,10 +121,12 @@ static void cb_set() {
     screen_settings_push();
 }
 
+// Back cancels without setting.
 static void cb_cancel() {
     screen_settings_push();
 }
 
+// Builds one "Label ... Value" row.
 static lv_obj_t *make_row(lv_obj_t *parent, const char *label, lv_obj_t **val_lbl_out) {
     lv_obj_t *row = lv_obj_create(parent);
     lv_obj_set_size(row, LV_PCT(100), LV_SIZE_CONTENT);
@@ -138,6 +153,7 @@ static lv_obj_t *make_row(lv_obj_t *parent, const char *label, lv_obj_t **val_lb
     return row;
 }
 
+// Loads the Set Clock screen, seeded from the current system time.
 void screen_set_clock_push() {
     _row_cursor = ROW_YEAR;
 
@@ -161,6 +177,11 @@ void screen_set_clock_push() {
         lv_obj_set_style_bg_opa(content, LV_OPA_TRANSP, LV_PART_MAIN);
         lv_obj_set_style_border_width(content, 0, LV_PART_MAIN);
         lv_obj_set_style_pad_all(content, 14, LV_PART_MAIN);
+        // Overridden separately from pad_all -- the legend is the last child of this flex
+        // column, so pad_all's bottom inset was also the legend's distance from the true
+        // screen edge, leaving it floating ~14px up instead of the ~6px margin every other
+        // screen's explicitly-aligned legend uses (same fix as screen_item_edit.cpp).
+        lv_obj_set_style_pad_bottom(content, 6, LV_PART_MAIN);
         lv_obj_set_style_pad_row(content, 10, LV_PART_MAIN);
         lv_obj_set_layout(content, LV_LAYOUT_FLEX);
         lv_obj_set_flex_flow(content, LV_FLEX_FLOW_COLUMN);

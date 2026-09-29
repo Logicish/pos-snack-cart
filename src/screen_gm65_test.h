@@ -1,6 +1,13 @@
 #pragma once
 #include <stddef.h>
 
+/*
+  Author--- LogicishDesigns
+  Date----- September 2026
+  Function- "Scanner" (was "GM65 Test") -- Toggle Scan Mode / Settings / Restore
+            Defaults, plus a raw hex-dump capture of whatever the module replies.
+*/
+
 // TEMPORARY diagnostic screen — see screen_gm65_test.cpp header comment.
 void screen_gm65_test_push();
 

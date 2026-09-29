@@ -1,6 +1,13 @@
 #include "ui.h"
 #include "theme.h"
 
+/*
+  Author--- LogicishDesigns
+  Date----- September 2026
+  Function- Implements the shared button-legend widgets declared in ui.h.
+*/
+
+// Builds an empty legend container -- caller fills it with ui_legend_row() calls.
 lv_obj_t *ui_legend(lv_obj_t *parent) {
     lv_obj_t *legend = lv_obj_create(parent);
     lv_obj_set_size(legend, LV_PCT(100), LV_SIZE_CONTENT);
@@ -38,6 +45,7 @@ void ui_legend_row(lv_obj_t *legend, const char *left, lv_color_t left_color,
     lv_obj_set_style_text_font(r, &lv_font_montserrat_16, LV_PART_MAIN);
 }
 
+// Standalone red "Cancel" label bottom-right, for screens where Back is the only button.
 void ui_footer_cancel(lv_obj_t *parent) {
     lv_obj_t *lbl = lv_label_create(parent);
     lv_label_set_text(lbl, "Cancel");

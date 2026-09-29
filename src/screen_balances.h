@@ -1,5 +1,12 @@
 #pragma once
 
+/*
+  Author--- LogicishDesigns
+  Date----- September 2026
+  Function- "Balances" -- lists every outstanding checkout, Green clears one once
+            the Venmo payment lands.
+*/
+
 // "Balances" — top-level Admin Menu entry, 2026-08-28. On-device equivalent of the web
 // portal's /balance page: lists uncleared checkouts (checkouts.cleared_at IS NULL) one
 // per transaction, since each Venmo payment note already carries its own transaction

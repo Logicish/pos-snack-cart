@@ -11,6 +11,12 @@
 #include <time.h>
 #include <string.h>
 
+/*
+  Author--- LogicishDesigns
+  Date----- September 2026
+  Function- Implements the Balances screen declared in screen_balances.h.
+*/
+
 #define FOOTER_H 52
 
 // Deliberately a touch smaller than the visible row count so successive presses always
@@ -20,12 +26,15 @@
 
 static lv_obj_t *_scr;
 static lv_obj_t *_list;
+static lv_obj_t *_legend;
+static bool       _confirming;  // true while the "Confirm balance clear?" footer is up
 static lv_obj_t *_rows[MAX_BALANCES];
 static OutstandingCheckout _data[MAX_BALANCES];
 static int        _count;
 static int        _cursor;
 static int        _prev_cursor = -1;
 
+// Formats one checkout as "#id First L.  $total  MM/DD".
 static void format_row(char *out, size_t out_len, const OutstandingCheckout &c) {
     const User *u = users_get_by_id(c.user_id);
     char last_initial = (u && u->last_name[0]) ? u->last_name[0] : '?';
@@ -43,6 +52,7 @@ static void format_row(char *out, size_t out_len, const OutstandingCheckout &c) 
              c.total_price_cents / 100, c.total_price_cents % 100, date_buf);
 }
 
+// Builds one list row for _data[i].
 static void build_row(int i) {
     lv_obj_t *row = lv_obj_create(_list);
     lv_obj_set_size(row, LV_PCT(100), LV_SIZE_CONTENT);
@@ -62,6 +72,7 @@ static void build_row(int i) {
     lv_obj_set_style_text_font(lbl, &lv_font_montserrat_16, LV_PART_MAIN);
 }
 
+// Highlights the currently-selected row.
 static void refresh_cursor() {
     if (_count == 0) return;
     if (_prev_cursor >= 0 && _prev_cursor < _count && _prev_cursor != _cursor) {
@@ -96,21 +107,76 @@ static void rebuild_rows() {
     refresh_cursor();
 }
 
+static void cb_up();
+static void cb_down();
+static void cb_page_left();
+static void cb_page_right();
+static void cb_clear_start();
+static void cb_confirm_yes();
+static void cb_confirm_no();
+static void cb_back();
+
+// Rebuilds the footer for normal browsing mode.
+static void build_normal_legend() {
+    lv_obj_clean(_legend);
+    char move_lbl[24], page_lbl[24];
+    snprintf(move_lbl, sizeof(move_lbl), "Move %s%s", LV_SYMBOL_UP, LV_SYMBOL_DOWN);
+    snprintf(page_lbl, sizeof(page_lbl), "Page %s%s", LV_SYMBOL_LEFT, LV_SYMBOL_RIGHT);
+    ui_legend_row(_legend, move_lbl, lv_color_hex(C_YELLOW), page_lbl, lv_color_hex(C_YELLOW));
+    ui_legend_row(_legend, "Clear", lv_color_hex(C_GREEN), "Back", lv_color_hex(C_RED));
+}
+
+// Rebuilds the footer for the Clear confirm step.
+static void build_confirm_legend() {
+    lv_obj_clean(_legend);
+    ui_legend_row(_legend, "", lv_color_hex(C_TEXT), "Confirm balance clear", lv_color_hex(C_ORANGE));
+    ui_legend_row(_legend, "Yes", lv_color_hex(C_GREEN), "No", lv_color_hex(C_RED));
+}
+
+// Restores normal browsing mode -- footer + button handlers -- shared by both confirm outcomes.
+static void restore_normal_handlers() {
+    _confirming = false;
+    build_normal_legend();
+
+    ButtonHandlers h;
+    h.up    = cb_up;
+    h.down  = cb_down;
+    h.left  = cb_page_left;
+    h.right = cb_page_right;
+    h.enter = cb_clear_start;
+    h.back  = cb_back;
+    buttons_set_handlers(h);
+}
+
+// Up: moves the selection to the previous row, wrapping.
 static void cb_up() {
     if (_count == 0) return;
     _cursor = (_cursor - 1 + _count) % _count;
     refresh_cursor();
 }
 
+// Down: moves the selection to the next row, wrapping.
 static void cb_down() {
     if (_count == 0) return;
     _cursor = (_cursor + 1) % _count;
     refresh_cursor();
 }
 
-// LEFT: jump ~a screenful down the list, same wrap-at-the-end behavior as
-// screen_add_item.cpp's ATTACH_PAGE/cb_attach_pagedown.
-static void cb_page_down() {
+// LEFT: jump ~a screenful back up the list, wrapping to the last row. RIGHT does the
+// same forward. Remapped from a Left-only "Next Screen" accelerator 2026-09-15 to match
+// Browse/Price and Item Lookup's Left/Right paging convention.
+static void cb_page_left() {
+    if (_count == 0) return;
+    if (_cursor <= 0) {
+        _cursor = _count - 1;
+    } else {
+        _cursor -= BALANCES_PAGE;
+        if (_cursor < 0) _cursor = 0;
+    }
+    refresh_cursor();
+}
+
+static void cb_page_right() {
     if (_count == 0) return;
     if (_cursor >= _count - 1) {
         _cursor = 0;
@@ -121,20 +187,40 @@ static void cb_page_down() {
     refresh_cursor();
 }
 
-// GREEN: marks the highlighted transaction cleared (the Venmo payment landed) and drops
-// it off the list -- no confirmation step, matching how Clear works everywhere else in
-// this codebase that isn't destructive of real history (cleared_at is UPDATE-only, never
-// a delete — see checkouts.h).
-static void cb_clear() {
+// GREEN while browsing normally: arms the Clear confirm step instead of clearing right
+// away. Added 2026-09-15 -- Clear is UPDATE-only, never a delete (see checkouts.h), so
+// it was never destructive of real history, but a stray Enter press could still drop a
+// real outstanding balance off the list with no warning, which is worth a confirm on its
+// own merits.
+static void cb_clear_start() {
     if (_count == 0) return;
-    checkouts_clear(_data[_cursor].id);
-    rebuild_rows();
+    _confirming = true;
+    build_confirm_legend();
+
+    ButtonHandlers h;
+    h.enter = cb_confirm_yes;
+    h.back  = cb_confirm_no;
+    buttons_set_handlers(h);
 }
 
+// GREEN during confirm: actually clears the highlighted transaction.
+static void cb_confirm_yes() {
+    checkouts_clear(_data[_cursor].id);
+    rebuild_rows();
+    restore_normal_handlers();
+}
+
+// RED during confirm: cancels, nothing cleared.
+static void cb_confirm_no() {
+    restore_normal_handlers();
+}
+
+// Back returns to the main Admin Menu.
 static void cb_back() {
     screen_menu_push();
 }
 
+// Loads the Balances screen.
 void screen_balances_push() {
     _cursor = 0;
 
@@ -153,27 +239,19 @@ void screen_balances_push() {
         lv_obj_set_layout(_list, LV_LAYOUT_FLEX);
         lv_obj_set_flex_flow(_list, LV_FLEX_FLOW_COLUMN);
 
-        lv_obj_t *legend = ui_legend(_scr);
-        lv_obj_set_width(legend, SCREEN_W - 24);
-        lv_obj_align(legend, LV_ALIGN_BOTTOM_MID, 0, -6);
-        char left_arrow[24], move_lbl[24];
-        snprintf(left_arrow, sizeof(left_arrow), "%s Next Screen", LV_SYMBOL_LEFT);
-        snprintf(move_lbl, sizeof(move_lbl), "%s%s Move", LV_SYMBOL_UP, LV_SYMBOL_DOWN);
-        ui_legend_row(legend, left_arrow, lv_color_hex(C_YELLOW), move_lbl, lv_color_hex(C_YELLOW));
-        ui_legend_row(legend, "Clear", lv_color_hex(C_GREEN), "Back", lv_color_hex(C_RED));
+        _legend = ui_legend(_scr);
+        lv_obj_set_width(_legend, SCREEN_W - 24);
+        lv_obj_align(_legend, LV_ALIGN_BOTTOM_MID, 0, -6);
+        build_normal_legend();
     }
 
     header_set_visible(true);
     header_set_title("BALANCES");
     rebuild_rows();  // data changes visit to visit (and after every Clear), always re-query
 
-    ButtonHandlers h;
-    h.up    = cb_up;
-    h.down  = cb_down;
-    h.left  = cb_page_down;
-    h.enter = cb_clear;
-    h.back  = cb_back;
-    buttons_set_handlers(h);
+    // Always land back in normal (not confirm) mode -- a fresh visit shouldn't be able to
+    // arrive mid-confirm from a previous visit's state.
+    restore_normal_handlers();
 
     lv_scr_load(_scr);
 }

@@ -1,19 +1,26 @@
 #pragma once
 #include <time.h>
 
-// DS3231 RTC integration, 2026-08-28 — see snack_cart_pos.md's RTC section for the
-// hardware side (I2C SDA=GPIO5, SCL=GPIO6, no level shifter, VCC=3.3V). Deliberately
-// no NTP half of the original 2026-08-17 plan: this device is AP-only (broadcasts its own
-// WiFi network, never joins an upstream one — see webserver.cpp), so there's no network
-// path to NTP at all. The DS3231 is the only source of continuity across power loss;
-// screen_set_clock.cpp's manual entry is the only way to correct it.
+/*
+  Author--- LogicishDesigns
+  Date----- September 2026
+  Function- DS3231 real-time-clock integration -- syncs the ESP32 system clock from
+            the chip at boot and lets a manual time correction (screen_set_clock.cpp)
+            or the DS3231 Test screen write back to it.
+  Notes---- See snack_cart_pos.md's RTC section for the hardware side (I2C SDA=GPIO5,
+            SCL=GPIO4, no level shifter, VCC=3.3V). Deliberately no NTP half of the
+            original 2026-08-17 plan: this device is AP-only (broadcasts its own WiFi
+            network, never joins an upstream one — see webserver.cpp), so there's no
+            network path to NTP at all. The DS3231 is the only source of continuity
+            across power loss; screen_set_clock.cpp's manual entry is the only way to
+            correct it.
+*/
 
 // Call once from setup(), after Serial is up. Starts I2C on the reserved pins, looks for
 // the DS3231, and — if found and it reports real (non-power-lost) time — syncs the ESP32
 // system clock from it via settimeofday(), the same call screen_set_clock.cpp uses. Safe
 // to call even if the chip isn't wired yet: rtc_available() just comes back false and
-// nothing else in the app changes behavior (time(nullptr) keeps counting from boot, same
-// placeholder convention checkouts.cpp/webserver.cpp already document).
+// nothing else in the app changes behavior (time(nullptr) keeps counting from boot).
 void rtc_init();
 
 bool rtc_available();    // true if the DS3231 responded on I2C at boot

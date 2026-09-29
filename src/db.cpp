@@ -5,14 +5,25 @@
 #include <sqlite3.h>
 #include <string.h>
 
+/*
+  Author--- LogicishDesigns
+  Date----- September 2026
+  Function- SD card mount + SQLite database layer: schema creation/migration, the
+            config key/value table, and the raw-file backup/restore + write-test
+            primitives declared in db.h.
+*/
+
 #define SD_CS_PIN 14
 
 static sqlite3 *_db = nullptr;
 
+// Returns the open DB handle, or nullptr if db_init() failed or hasn't run yet.
 sqlite3 *db_handle() { return _db; }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
+// Runs a raw SQL statement with no result set (CREATE TABLE, PRAGMA, INSERT/UPDATE),
+// logging and returning false on failure.
 static bool exec(const char *sql) {
     char *err = nullptr;
     int rc = sqlite3_exec(_db, sql, nullptr, nullptr, &err);
@@ -52,6 +63,8 @@ static bool column_exists(const char *table, const char *column) {
 
 // ── public ────────────────────────────────────────────────────────────────────
 
+// Mounts the SD card, opens (or creates) pos.db, and creates/migrates the schema.
+// Non-fatal on failure -- returns false and leaves _db null for the caller to handle.
 bool db_init() {
     // Shared HSPI bus with the display — SCLK=12/MISO=13/MOSI=11, SD gets its own CS.
     // Confirmed working (no bus contention with the display) via the earlier SD test screen.
@@ -70,6 +83,11 @@ bool db_init() {
 
     if (sqlite3_open("/sd/pos.db", &_db) != SQLITE_OK) {
         Serial.printf("[DB] open failed: %s\n", sqlite3_errmsg(_db));
+        // sqlite3_open() can still hand back a non-null (but unusable) handle on failure --
+        // close/null it so db_handle() reliably reports "unavailable" here, matching what
+        // boot_try_init_db()'s caller already assumes (system_alerts.cpp's _db_unavailable
+        // check, screen_sd_error.cpp's diagnosis message).
+        if (_db) { sqlite3_close(_db); _db = nullptr; }
         return false;
     }
     Serial.println("[DB] opened /sd/pos.db");
@@ -111,12 +129,14 @@ bool db_init() {
     // touching their checkout history or deleting the row.
     if (!column_exists("users", "admin"))  exec("ALTER TABLE users ADD COLUMN admin INTEGER NOT NULL DEFAULT 0;");
     if (!column_exists("users", "active")) exec("ALTER TABLE users ADD COLUMN active INTEGER NOT NULL DEFAULT 1;");
-    // Admin web-portal login, 2026-08-25 — salted SHA-256 (see auth.cpp), NULL for
-    // non-admin rows (they never log into the web portal). password_is_default drives the
-    // forced change-password redirect after first login.
-    if (!column_exists("users", "password_hash"))       exec("ALTER TABLE users ADD COLUMN password_hash TEXT;");
-    if (!column_exists("users", "password_salt"))        exec("ALTER TABLE users ADD COLUMN password_salt TEXT;");
-    if (!column_exists("users", "password_is_default"))  exec("ALTER TABLE users ADD COLUMN password_is_default INTEGER NOT NULL DEFAULT 0;");
+    // Admin web-portal login used a per-admin salted SHA-256 password (see auth.cpp,
+    // password_hash/password_salt/password_is_default columns) from 2026-08-25 until
+    // 2026-09-14, when it was dropped for a single shared plaintext password (see
+    // webserver.cpp's ADMIN_PASSWORD_CONFIG_KEY) -- this device's AP is off most of the
+    // time, local-range-only, no real threat model to justify the complexity. Those three
+    // columns are left as inert leftovers on any DB that already has them (SQLite on this
+    // build has no reliable DROP COLUMN, see the items.upc comment below for the same
+    // reasoning) rather than migrated -- nothing reads or writes them anymore.
 
     exec(
         "CREATE TABLE IF NOT EXISTS items ("
@@ -130,6 +150,26 @@ bool db_init() {
         "  stocked     INTEGER NOT NULL DEFAULT 0"
         ");"
     );
+
+    // hidden — 2026-09-14. Lets an item be pulled from customer-facing Browse/scanning
+    // (checkout add-by-scan, Price Check, Restock/Add-Attach's scan-to-open all treat a
+    // hidden item's UPC as unrecognized, via items_find_by_upc()) while its row -- and any
+    // checkout_items history referencing it -- stays intact, unlike items_delete() which
+    // is blocked outright once real history exists. Still reachable through Inventory's
+    // full list and Add/Attach's existing-item picker, both deliberately unfiltered, so an
+    // admin can restock/unhide/edit it without a live barcode in hand. Added after real
+    // items already existed on-device, so it's an ALTER not a CREATE TABLE column, same
+    // guarded pattern as users.admin/active above.
+    if (!column_exists("items", "hidden")) exec("ALTER TABLE items ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0;");
+    // Verify it actually landed rather than trust it — this exact ALTER TABLE ADD COLUMN
+    // pattern silently failed to persist on real hardware once before (see the users.active
+    // history above), with no error surfaced anywhere at the time; that was only ever caught
+    // by physically pulling the SD card. Logging it immediately here means a repeat shows up
+    // in the Serial monitor on the very next boot instead of needing the same slow diagnosis.
+    if (!column_exists("items", "hidden")) {
+        Serial.println("[DB] WARNING: items.hidden column missing after ALTER -- Hide/Unhide"
+                        " and any query selecting it will fail this boot.");
+    }
 
     // item_upcs — 2026-08-25, replaces items.upc. One item can be sold under several real
     // barcodes (e.g. a variety pack where the owner restocks by package, not by flavor, so
@@ -183,11 +223,6 @@ bool db_init() {
         ");"
     );
 
-    exec(
-        "INSERT OR IGNORE INTO config (key, value) VALUES"
-        "  ('wifi_password_hash', '');"
-    );
-
     // Payment recipient info — deliberately its OWN table, not a couple of `config` rows
     // and not columns on `users`. Reasoning (2026-08-24 design discussion):
     //  - Not on `users`: a Venmo/Zelle handle is only ever relevant for whoever currently
@@ -211,15 +246,15 @@ bool db_init() {
         "INSERT OR IGNORE INTO payment_methods (method, display_name, handle, enabled) VALUES"
         "  ('venmo', '', '', 1);"
     );
-    // Real display_name/handle deliberately NOT seeded here — same reasoning as
-    // users_import_from_sd() in users.cpp: real PII doesn't belong hardcoded in firmware
-    // source. Set these once through the Admin web page's Payment Settings form instead
-    // (writes straight to this table, no firmware rebuild needed).
+    // Real display_name/handle deliberately NOT seeded here — real PII doesn't belong
+    // hardcoded in firmware source. Set these once through the Admin web page's Payment
+    // Settings form instead (writes straight to this table, no firmware rebuild needed).
 
     Serial.println("[DB] schema ready");
     return true;
 }
 
+// Closes the DB handle, if open.
 void db_close() {
     if (_db) {
         sqlite3_close(_db);
@@ -227,6 +262,7 @@ void db_close() {
     }
 }
 
+// Reads one value out of the config table by key. False if missing/empty/unavailable.
 bool db_config_get(const char *key, char *out, size_t out_len) {
     if (!_db) return false;
 
@@ -247,6 +283,7 @@ bool db_config_get(const char *key, char *out, size_t out_len) {
     return found;
 }
 
+// Writes/overwrites one value in the config table by key.
 bool db_config_set(const char *key, const char *value) {
     if (!_db) return false;
 
@@ -259,4 +296,95 @@ bool db_config_set(const char *key, const char *value) {
         sqlite3_finalize(stmt);
     }
     return ok;
+}
+
+// ── backup / restore ─────────────────────────────────────────────────────────
+// Plain SD.h paths (no "/sd" VFS prefix) — that prefix is specific to sqlite3_open()'s
+// ESP-IDF VFS mount, a separate path namespace from Arduino's SD.h, which already
+// addresses the same physical FAT root directly (confirmed by SD Info's own file listing,
+// which shows "pos.db" with no "/sd/" prefix using this same SD.h API).
+#define DB_PATH_SD      "/pos.db"
+#define DB_BACKUP_PATH  "/pos_backup.db"
+
+// Copies one file on the SD card byte-for-byte, overwriting any existing destination.
+static bool copy_file(const char *src, const char *dst) {
+    File in = SD.open(src, FILE_READ);
+    if (!in) return false;
+
+    SD.remove(dst);  // start clean -- FILE_WRITE would append onto any leftover partial file
+    File out = SD.open(dst, FILE_WRITE);
+    if (!out) {
+        in.close();
+        return false;
+    }
+
+    uint8_t buf[512];
+    bool ok = true;
+    while (true) {
+        int n = in.read(buf, sizeof(buf));
+        if (n <= 0) break;
+        if (out.write(buf, n) != (size_t)n) { ok = false; break; }
+    }
+    in.close();
+    out.close();
+    return ok;
+}
+
+// Copies the live DB to the backup file.
+bool db_backup_now() {
+    bool ok = copy_file(DB_PATH_SD, DB_BACKUP_PATH);
+    Serial.printf("[DB] backup %s\n", ok ? "OK" : "FAILED");
+    return ok;
+}
+
+// Copies the backup file over the live DB, if a backup exists.
+bool db_restore_from_backup() {
+    if (!SD.exists(DB_BACKUP_PATH)) {
+        Serial.println("[DB] no backup file present, nothing to restore from");
+        return false;
+    }
+    bool ok = copy_file(DB_BACKUP_PATH, DB_PATH_SD);
+    Serial.printf("[DB] restore from backup %s\n", ok ? "OK" : "FAILED");
+    return ok;
+}
+
+// Runs a quick, proven-primitive query to confirm the schema is actually queryable.
+bool db_sanity_check() {
+    if (!_db) return false;
+
+    sqlite3_stmt *stmt;
+    bool ok = false;
+    if (sqlite3_prepare_v2(_db, "SELECT COUNT(*) FROM users;", -1, &stmt, nullptr) == SQLITE_OK) {
+        ok = sqlite3_step(stmt) == SQLITE_ROW;
+        sqlite3_finalize(stmt);
+    }
+    return ok;
+}
+
+// ── SD-layer check ───────────────────────────────────────────────────────────
+#define SD_TEST_PATH "/sd_write_test.tmp"
+#define SD_TEST_PAYLOAD "snack-cart-write-test"
+
+// Writes a throwaway file, reads it back, and verifies it round-tripped correctly --
+// confirms the SD card itself is actually writable right now.
+bool sd_write_read_test() {
+    SD.remove(SD_TEST_PATH);  // clear any prior leftover first, same as copy_file()'s approach
+
+    File out = SD.open(SD_TEST_PATH, FILE_WRITE);
+    if (!out) return false;
+    size_t written = out.print(SD_TEST_PAYLOAD);
+    out.close();
+    if (written != strlen(SD_TEST_PAYLOAD)) {
+        SD.remove(SD_TEST_PATH);
+        return false;
+    }
+
+    File in = SD.open(SD_TEST_PATH, FILE_READ);
+    if (!in) return false;
+    char buf[sizeof(SD_TEST_PAYLOAD)] = {0};
+    size_t read = in.read((uint8_t *)buf, sizeof(buf) - 1);
+    in.close();
+    SD.remove(SD_TEST_PATH);  // don't leave the throwaway file sitting on the card
+
+    return read == strlen(SD_TEST_PAYLOAD) && strcmp(buf, SD_TEST_PAYLOAD) == 0;
 }

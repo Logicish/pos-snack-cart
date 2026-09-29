@@ -1,5 +1,12 @@
 #pragma once
 
+/*
+  Author--- LogicishDesigns
+  Date----- September 2026
+  Function- "Admin Login" -- Start screen's Green button. Scan an admin badge to
+            reach the Admin Menu; anything else gets turned away in place.
+*/
+
 // "Admin Login" — Start screen's Green/Enter button, 2026-08-26. Makes reaching the
 // Admin Menu a deliberate two-step action (press this, then scan) instead of an automatic
 // side effect of a badge happening to be an admin's. Side effect worth knowing: a PLAIN

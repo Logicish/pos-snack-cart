@@ -1,3 +1,11 @@
+/*
+  Author--- LogicishDesigns
+  Date----- September 2026
+  Function- Implements the Scanner screen declared in screen_gm65_test.h --
+            Disable QR Config Scan / Settings / Restore Defaults, plus the raw
+            hex-dump capture path.
+*/
+
 // TEMPORARY diagnostic screen, 2026-08-26 — GM65 software-side settings test + lock-in.
 // Protocol originally reverse-derived from DFRobot's GM65_scanner_for_Arduino library
 // (an early attempt to text-extract our own manual PDF failed — no pdftoppm available in
@@ -41,14 +49,21 @@
 // Internal Flash" command (0x0009 type, real CRC, found in the real manual) is required
 // to persist it, and Setup Defaults below now sends that too.
 //
-// Factory Reset here sends 0x50 (verified real "reset to factory defaults" per the
-// manual) — NOT the DFRobot library's 0x55, which turned out to be a different command
-// entirely ("restore user-defined factory settings," a separate saved-baseline slot this
-// project never populates). Deliberately not using that save-a-custom-baseline mechanism
-// at all: it still requires writing the real values first, so it's pure overhead on top
-// of Setup Defaults for no real benefit, and it's untested machinery on a module with a
-// track record of not doing what its docs promise.
+// A "Reset -- warning" row (true factory reset, register 0x00D9=0x50) lived here from
+// 2026-08-26 until 2026-09-14, when it was removed outright: redundant with Setup
+// Defaults for anything this project has actually needed to fix, while carrying real
+// destructive risk Setup Defaults doesn't (wiping every register, not just the 3 this
+// project cares about, risked knocking the module out of the UART "Series Output" mode
+// this whole project depends on — recovery meant physically rescanning the config QR
+// sheet). Same reasoning that got Reset DB deleted outright rather than kept "just in
+// case" — see project memory/snack_cart_pos.md.
+//
+// "Read Settings" and "Sound Mode" moved out to their own sub-screen, screen_gm65_settings.cpp
+// ("Settings" row below), same day — that screen decodes the raw bytes into labeled fields
+// instead of a bare hex dump, and adds a couple of settings (buzzer/LED on-off) this list
+// never exposed at all.
 #include "screen_gm65_test.h"
+#include "screen_gm65_settings.h"
 #include "screens.h"
 #include "screen_admin_tools.h"
 #include "header.h"
@@ -60,34 +75,35 @@
 
 extern HardwareSerial scanner;  // owned by main.cpp; this screen only ever writes to it
 
-#define ROW_COUNT 5
+#define ROW_COUNT 3
 #define FOOTER_H  52
 
 static lv_obj_t *_scr;
 static lv_obj_t *_rows[ROW_COUNT];
-static lv_obj_t *_row_lbls[ROW_COUNT];  // rows 3 and 4 change text dynamically
+static lv_obj_t *_row_lbls[ROW_COUNT];  // row 0 changes text dynamically
 static lv_obj_t *_log_lbl;
 static int        _cursor;
 static int        _prev_cursor = -1;
 
+// Reordered 2026-09-14: Toggle Scan Mode first (the everyday action), Settings added
+// (opens screen_gm65_settings.cpp), Restore Defaults moved to last and renamed from
+// "Setup Defaults" -- reads better as the "put it back to known-good" action once it's
+// not the first/only thing on the list.
+//
+// Row 0 changed the same day, later: was "Toggle Scan Mode" (Induction/Manual sensing,
+// register 0x0000 bits 0-1) -- retired in favor of the config-QR-disable toggle below,
+// since the screensaver already has its own independent, already-proven copy of that
+// exact Induction/Manual toggle (see screen_screensaver.cpp's write_reg(0x54)/(0x57)) --
+// this row was only ever a manual diagnostic convenience for it, not the real trigger.
 static const char *ROW_LABELS[ROW_COUNT] = {
-    "Setup Defaults",
-    "Read Settings",
-    "Reset -- warning",
-    "Toggle Scan Mode: On",
-    "Sound Mode: - Hz",  // placeholder — updated once the row is actually pressed
+    "Disable QR Config Scan",  // overwritten immediately by update_qr_row_label()
+    "Settings",
+    "Restore Defaults",
 };
 
+// Sends a single-register write command to the GM65.
 static void write_reg(uint8_t addr_hi, uint8_t addr_lo, uint8_t data) {
     const uint8_t cmd[9] = {0x7E, 0x00, 0x08, 0x01, addr_hi, addr_lo, data, 0xAB, 0xCD};
-    scanner.write(cmd, 9);
-}
-
-// `count` is a real field in the protocol (manual: "Datas: Numbers of zone bit for
-// Sequential read"), not just a fixed marker — the reply comes back with that many data
-// bytes in one frame, registers starting at addr_hi:addr_lo read sequentially.
-static void read_reg(uint8_t addr_hi, uint8_t addr_lo, uint8_t count) {
-    const uint8_t cmd[9] = {0x7E, 0x00, 0x07, 0x01, addr_hi, addr_lo, count, 0xAB, 0xCD};
     scanner.write(cmd, 9);
 }
 
@@ -106,7 +122,17 @@ static void save_to_eeprom() {
 // instead of back one level to Advanced Tools -- same bug screen_sdinfo.cpp had).
 static void cb_back() { screen_admin_tools_push(); }
 
+// fwd decls -- "list plumbing" section further down, needed by the QR-confirm screen
+// below so its Yes/No handlers can restore the list's own button handlers on return.
+static void refresh_cursor();
+static void cb_up();
+static void cb_down();
+static void cb_enter();
+
 // ── row actions ───────────────────────────────────────────────────────────────────
+// On-screen label is "Restore Defaults" as of 2026-09-14 (moved to the last row too) --
+// function name kept as-is, same convention as this screen's own "Scanner"/GM65 Test
+// rename (see the file header comment): the label changed, not what it does.
 static void act_setup_defaults() {
     // Bit 6 empirically confirmed BACKWARDS from the reference library's naming/comment
     // ("silent_mode, 1=on/0=off") on this real hardware, 2026-08-26 — 0x07 (bit6=0) was
@@ -133,154 +159,153 @@ static void act_setup_defaults() {
     lv_label_set_text(_log_lbl, "Sent: reg0000=0x57, reg0007=0x00,\nreg000A=0x64, saved to flash\n(watch for an ACK below)");
 }
 
-static void act_read_settings() {
-    // 14 bytes covers registers 0x0000-0x000D in one frame: mode/light/aim/buzzer-mute/
-    // LED (0x0000), decode-prompt (0x0002), settlement-code (0x0003), image-stabilization/
-    // read-interval/single-read-time (0x0004-06), sleep+free-time (0x0007-08), buzzer
-    // frequency mode (0x000A) + duration (0x000B), misc piezo bits (0x000C), serial-
-    // output/encoding (0x000D) — real values instead of guessing from 0x0000 alone.
-    read_reg(0x00, 0x00, 0x0E);
-    lv_label_set_text(_log_lbl, "Sent read for reg0000-000D...\n(waiting for reply below)");
-}
+// ── config-QR-disable toggle — added 2026-09-14, the project's own flagged pre-launch
+// step (see project memory project_gm65_settings_lockin's "remaining backlog"). Register
+// 0x0003 bit 0 is what the manual (cross-checked across the GM65/GM65-S/DFR0660 texts,
+// same sources as everything else in this file) calls "Settlement Code" -- its own
+// translated term for the special setup/config QR codes (the same kind on the physical
+// config sheet used to originally provision this module into UART "Series Output" mode):
+// 1 = Close (module stops treating a scanned QR as a config command, just reports its
+// contents like any other barcode), 0 = Open (normal -- a config QR reconfigures the
+// module). 0x03 (not 0x01) is the value already pinned for "disable" in project memory --
+// this table's own OCR extraction is garbled on bit 1's label, so trusting the
+// already-recorded value rather than re-deriving a guess from a known-bad table read.
+//
+// Gated behind a confirm screen (see build_qr_confirm_ui() below) since this one has a
+// real, easy-to-forget consequence: while disabled, the physical config-QR sheet stops
+// working entirely -- the only way back is this same toggle, not a rescan. Persisted via
+// save_to_eeprom() like Restore Defaults, so it survives a real power cycle; deliberately
+// NOT re-asserted at boot the way registers 0x0000/0x0007/0x000A are, since this is meant
+// to be a deliberate, rarely-changed admin choice, not a locked invariant main.cpp should
+// silently fight if someone re-enables it on purpose to fix something.
+static bool _qr_scan_disabled = false;  // display-only tracking -- resets to "enabled" on
+                                          // reboot regardless of the chip's real persisted
+                                          // state, since nothing here reads it back
 
-// ── factory reset — confirm-gated, real risk of reverting the module out of the UART
-// "Series Output" mode this whole project depends on. A recovery command fires right
-// after, but if that doesn't stick the physical config QR sheet is the fallback.
 static lv_obj_t *_confirm_scr;
-static lv_obj_t *_confirm_lbl;
+static lv_obj_t *_confirm_prompt_lbl;
+static void build_qr_confirm_ui();
 
-static void cb_confirm_no() { screen_gm65_test_push(); }
-static void cb_confirm_yes() {
-    // 0x50 = true reset-to-factory-defaults, per the real manual (verified 2026-08-26).
-    // The DFRobot library's 0x55 is actually a DIFFERENT command — "restore user-defined
-    // factory settings" (a separate saved-baseline slot, set via a distinct 0x56 command
-    // this project never uses) — not a real factory reset at all. Corrected before this
-    // button was ever tested on real hardware.
-    write_reg(0x00, 0xD9, 0x50);
-    delay(200);
-    write_reg(0x00, 0x0D, 0x00);  // best-effort recovery: force back to Series Output mode
-
-    lv_label_set_text(_confirm_lbl,
-        "Factory reset sent, then a\n"
-        "Series Output re-apply was\n"
-        "sent right behind it.\n\n"
-        "Go back and run Setup\n"
-        "Defaults, then Read Settings\n"
-        "to confirm.\n\n"
-        "If nothing responds, re-scan\n"
-        "the config QR sheet (baud\n"
-        "9600, Series Output) to\n"
-        "recover.\n\n"
-        "BACK = return");
-
-    ButtonHandlers h;
-    h.back = cb_confirm_no;
-    buttons_set_handlers(h);
+// Redraws row 0's label to describe the action Enter will take next.
+static void update_qr_row_label() {
+    lv_label_set_text(_row_lbls[0], _qr_scan_disabled ? "Enable QR Config Scan" : "Disable QR Config Scan");
 }
 
-static void act_factory_reset() {
-    if (!_confirm_scr) {
-        _confirm_scr = lv_obj_create(nullptr);
-        lv_obj_set_style_bg_color(_confirm_scr, lv_color_hex(C_BG), LV_PART_MAIN);
-        lv_obj_set_style_bg_opa(_confirm_scr, LV_OPA_COVER, LV_PART_MAIN);
+// Enter on the confirm screen: writes register 0x0003, persists it, flips the tracked
+// state, and returns to the Scanner list.
+static void cb_qr_confirm_yes() {
+    bool disabling = !_qr_scan_disabled;
+    write_reg(0x00, 0x03, disabling ? 0x03 : 0x00);
+    delay(50);
+    save_to_eeprom();  // makes this survive a real power cycle, not just a soft reset
+    _qr_scan_disabled = disabling;
+    update_qr_row_label();
 
-        _confirm_lbl = lv_label_create(_confirm_scr);
-        lv_label_set_long_mode(_confirm_lbl, LV_LABEL_LONG_WRAP);
-        lv_obj_set_width(_confirm_lbl, 260);
-        lv_obj_set_style_text_color(_confirm_lbl, lv_color_hex(C_TEXT), LV_PART_MAIN);
-        lv_obj_set_style_text_font(_confirm_lbl, &lv_font_montserrat_16, LV_PART_MAIN);
-        lv_obj_set_style_text_align(_confirm_lbl, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
-        lv_obj_align(_confirm_lbl, LV_ALIGN_CENTER, 0, 0);
+    lv_label_set_text(_log_lbl, disabling
+        ? "Sent reg0003=0x03 (config QR\nscanning disabled), saved to\nflash. (watch for an ACK below)"
+        : "Sent reg0003=0x00 (config QR\nscanning re-enabled), saved to\nflash. (watch for an ACK below)");
+    header_set_title("SCANNER");
+    ButtonHandlers h;
+    h.up    = cb_up;
+    h.down  = cb_down;
+    h.enter = cb_enter;
+    h.back  = cb_back;
+    buttons_set_handlers(h);
+    refresh_cursor();
+    lv_scr_load(_scr);
+}
+
+// Back on the confirm screen: cancels, returns to the Scanner list unchanged.
+static void cb_qr_confirm_no() {
+    header_set_title("SCANNER");
+    ButtonHandlers h;
+    h.up    = cb_up;
+    h.down  = cb_down;
+    h.enter = cb_enter;
+    h.back  = cb_back;
+    buttons_set_handlers(h);
+    refresh_cursor();
+    lv_scr_load(_scr);
+}
+
+// Enter on row 0: opens the confirm screen instead of toggling directly.
+static void act_toggle_qr_scan() {
+    if (!_confirm_scr) build_qr_confirm_ui();
+
+    char buf[160];
+    if (!_qr_scan_disabled) {
+        snprintf(buf, sizeof(buf),
+            "Disable QR config scanning?\n\n"
+            "The module will stop reacting to\n"
+            "setup/config QR codes. The\n"
+            "physical config sheet won't work\n"
+            "again until this is turned back\n"
+            "on from this same screen.");
+    } else {
+        snprintf(buf, sizeof(buf),
+            "Re-enable QR config scanning?\n\n"
+            "The module will start reacting\n"
+            "to setup/config QR codes again.");
     }
+    lv_label_set_text(_confirm_prompt_lbl, buf);
 
-    header_set_visible(true);
-    header_set_title("FACTORY RESET?");
-    lv_label_set_text(_confirm_lbl,
-        "This wipes ALL GM65 settings,\n"
-        "possibly including the UART\n"
-        "\"Series Output\" mode this\n"
-        "whole project depends on.\n\n"
-        "A recovery command fires\n"
-        "right after, but if that\n"
-        "doesn't stick you may need\n"
-        "the physical config QR sheet\n"
-        "to get scanning back.\n\n"
-        "ENTER = do it anyway\n"
-        "BACK = cancel");
+    header_set_title("CONFIRM");
 
     ButtonHandlers h;
-    h.enter = cb_confirm_yes;
-    h.back  = cb_confirm_no;
+    h.enter = cb_qr_confirm_yes;
+    h.back  = cb_qr_confirm_no;
     buttons_set_handlers(h);
 
     lv_scr_load(_confirm_scr);
 }
 
-// ── scan-mode toggle — REPLACED the 0x00D9=0xA5 deep-sleep experiment, 2026-08-26, after
-// real testing (holding a hand in front of the module while sending 0xA5) proved that
-// command is just the module's normal "nothing detected" idle state, not a real power-
-// down — it still lights up and reacts to anything presented, which doesn't solve "no
-// random light during screensaver" at all. This instead clears/restores the working-mode
-// bits (0-1) of register 0x0000 — a plain register write, the same proven mechanism as
-// Setup Defaults, not a special/uncertain command. Manual mode (00) requires an explicit
-// trigger this project never sends, so there's no autonomous sensing loop running at all
-// to react to anything nearby; switching back to 0x57 restores full Induction mode
-// (light/aim/buzzer/LED bits are untouched either way, only bits 0-1 change).
-static bool _gm65_scan_off = false;
+// Builds the confirm screen's content, once.
+static void build_qr_confirm_ui() {
+    _confirm_scr = lv_obj_create(nullptr);
+    lv_obj_set_style_bg_color(_confirm_scr, lv_color_hex(C_BG), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(_confirm_scr, LV_OPA_COVER, LV_PART_MAIN);
 
-static void act_toggle_scan_mode() {
-    if (!_gm65_scan_off) {
-        write_reg(0x00, 0x00, 0x54);  // Manual mode, no auto-sensing; light/aim/buzzer/LED unchanged
-        _gm65_scan_off = true;
-        lv_label_set_text(_row_lbls[3], "Toggle Scan Mode: Off");
-        lv_label_set_text(_log_lbl, "Sent reg0000=0x54 (Manual\nmode -- no auto-sensing).\n(watch for an ACK below)");
-    } else {
-        write_reg(0x00, 0x00, 0x57);  // back to the full locked config (Induction + rest)
-        _gm65_scan_off = false;
-        lv_label_set_text(_row_lbls[3], "Toggle Scan Mode: On");
-        lv_label_set_text(_log_lbl, "Sent reg0000=0x57 (back to\nInduction).\n(watch for an ACK below)");
-    }
-}
+    lv_obj_t *content = lv_obj_create(_confirm_scr);
+    lv_obj_set_size(content, SCREEN_W, SCREEN_H - HDR_H);
+    lv_obj_align(content, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_obj_set_style_bg_opa(content, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_border_width(content, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_hor(content, 16, LV_PART_MAIN);
+    lv_obj_set_style_pad_ver(content, 16, LV_PART_MAIN);
+    // The footer legend is this flex column's last child, so pad_ver's bottom inset was
+    // also its distance from the true screen edge -- overridden separately to match the
+    // ~6px margin every explicitly-aligned legend elsewhere uses (see
+    // screen_item_edit.cpp's identical fix). This screen's own main list uses
+    // ui_legend(_scr) instead, which was never affected.
+    lv_obj_set_style_pad_bottom(content, 6, LV_PART_MAIN);
+    lv_obj_set_style_pad_row(content, 10, LV_PART_MAIN);
+    lv_obj_set_layout(content, LV_LAYOUT_FLEX);
+    lv_obj_set_flex_flow(content, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(content, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START);
 
-// ── sound mode — zone bit 0x000A ("Frequency for successfully read sound," verified
-// 2026-08-26 via the real manual). 0x00 = active buzzer mode; 0x01-0xFF = passive buzzer
-// mode, driven at Value*20 Hz. CORRECTED same day: 0x00 ("Active") is NOT a safe default
-// on this unit — a multi-register Read Settings caught it producing an audible "click"
-// instead of a beep, confirmed reproducible, not a one-off. 0x64 (2000Hz) is the real
-// confirmed-good value and is now what act_setup_defaults() actually locks in — this row
-// still includes 0x00 for reference/comparison, not because it's recommended. RAM-only
-// write, same as the scan-mode toggle — not saved to flash on its own.
-struct SoundMode { uint8_t value; const char *label; };
-static const SoundMode SOUND_MODES[] = {
-    {0x64, "Passive 2000Hz (locked default)"},
-    {0x32, "Passive 1000Hz"},
-    {0x7D, "Passive 2500Hz"},
-    {0xC8, "Passive 4000Hz"},
-    {0x00, "Active (do not use)"},
-};
-#define SOUND_MODE_COUNT (sizeof(SOUND_MODES) / sizeof(SOUND_MODES[0]))
-static size_t _sound_mode_idx = 0;
+    _confirm_prompt_lbl = lv_label_create(content);
+    lv_label_set_long_mode(_confirm_prompt_lbl, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(_confirm_prompt_lbl, LV_PCT(100));
+    lv_obj_set_style_text_color(_confirm_prompt_lbl, lv_color_hex(C_TEXT), LV_PART_MAIN);
+    lv_obj_set_style_text_font(_confirm_prompt_lbl, &lv_font_montserrat_16, LV_PART_MAIN);
 
-static void act_toggle_sound_mode() {
-    _sound_mode_idx = (_sound_mode_idx + 1) % SOUND_MODE_COUNT;
-    const SoundMode &m = SOUND_MODES[_sound_mode_idx];
-    write_reg(0x00, 0x0A, m.value);
+    lv_obj_t *grow = lv_obj_create(content);
+    lv_obj_set_size(grow, LV_PCT(100), 1);
+    lv_obj_set_style_bg_opa(grow, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_border_width(grow, 0, LV_PART_MAIN);
+    lv_obj_set_flex_grow(grow, 1);
 
-    char row[40];
-    snprintf(row, sizeof(row), "Sound Mode: %s", m.label);
-    lv_label_set_text(_row_lbls[4], row);
-
-    char log[64];
-    snprintf(log, sizeof(log), "Sent reg000A=0x%02X (%s)\nScan something to hear it.", m.value, m.label);
-    lv_label_set_text(_log_lbl, log);
+    lv_obj_t *legend = ui_legend(content);
+    ui_legend_row(legend, "Confirm", lv_color_hex(C_GREEN), "Cancel", lv_color_hex(C_RED));
 }
 
 typedef void (*RowAction)();
 static RowAction ROW_ACTIONS[ROW_COUNT] = {
-    act_setup_defaults, act_read_settings, act_factory_reset, act_toggle_scan_mode, act_toggle_sound_mode,
+    act_toggle_qr_scan, screen_gm65_settings_push, act_setup_defaults,
 };
 
 // ── list plumbing ─────────────────────────────────────────────────────────────────
+// Highlights the currently-selected row.
 static void refresh_cursor() {
     if (_prev_cursor >= 0 && _prev_cursor != _cursor) {
         lv_obj_set_style_bg_opa(_rows[_prev_cursor], LV_OPA_TRANSP, LV_PART_MAIN);
@@ -290,10 +315,12 @@ static void refresh_cursor() {
     lv_obj_scroll_to_view(_rows[_cursor], LV_ANIM_OFF);
 }
 
-static void cb_up()    { _cursor = (_cursor - 1 + ROW_COUNT) % ROW_COUNT; refresh_cursor(); }
-static void cb_down()  { _cursor = (_cursor + 1) % ROW_COUNT; refresh_cursor(); }
-static void cb_enter() { ROW_ACTIONS[_cursor](); }
+static void cb_up()    { _cursor = (_cursor - 1 + ROW_COUNT) % ROW_COUNT; refresh_cursor(); }  // Up: previous row, wrapping
+static void cb_down()  { _cursor = (_cursor + 1) % ROW_COUNT; refresh_cursor(); }               // Down: next row, wrapping
+static void cb_enter() { ROW_ACTIONS[_cursor](); }                                              // Enter: runs the selected row's action
 
+// Consumes one raw line off the scanner UART while this screen is active, showing it as
+// a hex dump. See screen_gm65_test.h for why this exists.
 bool screen_gm65_test_capture(const char *data, size_t len) {
     if (!_scr || lv_scr_act() != _scr) return false;
 
@@ -318,6 +345,7 @@ bool screen_gm65_test_capture(const char *data, size_t len) {
     return true;
 }
 
+// Loads the Scanner screen.
 void screen_gm65_test_push() {
     _cursor = 0;
 
@@ -380,6 +408,7 @@ void screen_gm65_test_push() {
     header_set_visible(true);
     header_set_title("SCANNER");
     lv_label_set_text(_log_lbl, "No data received yet.");
+    update_qr_row_label();  // reflects the tracked state, not just the built-in initial label
     refresh_cursor();
 
     ButtonHandlers h;

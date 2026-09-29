@@ -10,6 +10,12 @@
 #include <Arduino.h>
 #include <string.h>
 
+/*
+  Author--- LogicishDesigns
+  Date----- September 2026
+  Function- Implements the generic table browser declared in screen_db_view.h.
+*/
+
 #define FOOTER_H 52
 
 // UI display cap for this screen's row pool, not a DB storage limit — same convention as
@@ -44,7 +50,7 @@ static DbTable     _table;
 
 // One row's columns rendered generically as "name: value" lines via SQLite's own column
 // metadata (sqlite3_column_name/text) -- works for any table without per-table display
-// code. Diagnostic only, "for me mainly": raw values (e.g. users.password_hash) show
+// code. Diagnostic only, "for me mainly": raw values (e.g. users.badge_barcode) show
 // as-is, no special-casing.
 static void build_row_text(sqlite3_stmt *stmt, char *out, size_t out_len) {
     int n = sqlite3_column_count(stmt);
@@ -60,6 +66,7 @@ static void build_row_text(sqlite3_stmt *stmt, char *out, size_t out_len) {
     out[out_len - 1] = '\0';
 }
 
+// Re-queries the selected table and rebuilds every row card.
 static void rebuild_rows() {
     lv_obj_clean(_list);
     memset(_rows, 0, sizeof(_rows));
@@ -141,10 +148,12 @@ static void cb_page_down() {
     lv_obj_scroll_to_view(_rows[_cursor], LV_ANIM_OFF);
 }
 
+// Back returns to the DB submenu.
 static void cb_back() {
     screen_db_menu_push();
 }
 
+// Loads the browser for the given table.
 void screen_db_view_push(DbTable table) {
     _table = table;
 

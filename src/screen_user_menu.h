@@ -1,5 +1,11 @@
 #pragma once
 
+/*
+  Author--- LogicishDesigns
+  Date----- September 2026
+  Function- "Users" submenu -- Add User / Edit Users.
+*/
+
 // "User Management" — sub-menu under the main Admin Menu, 2026-08-28 reorg. Wraps the
 // former top-level "Add User" entry plus the new "Edit Users" entry. Back here returns to
 // the main Admin Menu, not a full logout.

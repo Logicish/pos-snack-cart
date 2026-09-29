@@ -11,6 +11,14 @@
 #include <string.h>
 #include <ctype.h>
 
+/*
+  Author--- LogicishDesigns
+  Date----- September 2026
+  Function- Implements the Edit Users screen declared in screen_edit_users.h --
+            three states: ST_LIST (alphabetical browse), ST_DETAIL (per-user rows),
+            ST_NAME_EDIT (name wheel).
+*/
+
 // Deliberately a touch smaller than the visible row count so successive presses always
 // overlap by a row and never skip one — same tuning rationale as ATTACH_PAGE in
 // screen_add_item.cpp.
@@ -18,14 +26,14 @@
 
 // Name-edit wheel: same single-row-per-field widget as screen_enroll.cpp (11 chars per
 // field, both first/last visible at once, inactive one dimmed) — reused as-is rather than
-// the newer two-row-wrap style (screen_add_item.cpp/screen_venmo_settings.cpp), since
+// the newer two-row-wrap style (screen_add_item.cpp/screen_payment_edit.cpp), since
 // that's what these exact fields were originally typed with.
 static const char CHARSET[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ -";
 #define CHARSET_LEN 28
 #define NAME_LEN    11
 #define IDX_DASH    27
 
-typedef enum { ST_LIST, ST_DETAIL, ST_NAME_EDIT, ST_RESET_CONFIRM } EditUsersState;
+typedef enum { ST_LIST, ST_DETAIL, ST_NAME_EDIT } EditUsersState;
 
 static lv_obj_t       *_scr;
 static lv_obj_t       *_content;
@@ -39,10 +47,7 @@ static int         _list_cursor;
 static int         _list_prev_cursor = -1;
 
 // -- ST_DETAIL --
-// Reset Password is deliberately always present, not hidden for non-admins -- resetting
-// a non-admin's password is harmless (nothing ever checks it, see users_set_admin()'s
-// comment on demotion) and gating it just adds a special case for no real benefit.
-#define DETAIL_ROW_COUNT 4
+#define DETAIL_ROW_COUNT 3
 static int        _detail_user_id;
 static lv_obj_t  *_detail_rows[DETAIL_ROW_COUNT];
 static lv_obj_t  *_detail_row_lbls[DETAIL_ROW_COUNT];
@@ -60,8 +65,8 @@ static lv_obj_t   *_name_cell_lbl[2][NAME_LEN];
 static void build_list_ui();
 static void build_detail_ui();
 static void build_name_ui();
-static void build_reset_confirm_ui();
 
+// Clears the content area between states.
 static void clear_content() {
     lv_obj_clean(_content);
     memset(_list_rows,     0, sizeof(_list_rows));
@@ -75,13 +80,15 @@ static void clear_content() {
 
 // ============ ST_LIST ============
 
+// Short flag letters instead of spelled-out words ("Admin, Locked" -> "A L") — requested
+// 2026-09-14 so the list scales to real names without wrapping/overflowing. "A"/"L" each
+// occupy a fixed slot (space where the flag isn't set) so the pair reads consistently
+// whether one, both, or neither is present, rather than the tag's own width jumping around.
 static void format_status_tag(char *out, size_t out_len, const User &u) {
-    if (u.admin && !u.active)      snprintf(out, out_len, "Admin, Locked");
-    else if (u.admin)              snprintf(out, out_len, "Admin");
-    else if (!u.active)            snprintf(out, out_len, "Locked");
-    else                            out[0] = '\0';
+    snprintf(out, out_len, "%c %c", u.admin ? 'A' : ' ', u.active ? ' ' : 'L');
 }
 
+// Highlights the currently-selected list row.
 static void refresh_list_cursor() {
     if (_list_count == 0) return;
     if (_list_prev_cursor >= 0 && _list_prev_cursor < _list_count && _list_prev_cursor != _list_cursor) {
@@ -92,19 +99,35 @@ static void refresh_list_cursor() {
     lv_obj_scroll_to_view(_list_rows[_list_cursor], LV_ANIM_OFF);
 }
 
+// Up: moves the selection up one row, wrapping.
 static void cb_list_up() {
     if (_list_count == 0) return;
     _list_cursor = (_list_cursor - 1 + _list_count) % _list_count;
     refresh_list_cursor();
 }
 
+// Down: moves the selection down one row, wrapping.
 static void cb_list_down() {
     if (_list_count == 0) return;
     _list_cursor = (_list_cursor + 1) % _list_count;
     refresh_list_cursor();
 }
 
-static void cb_list_page_down() {
+// LEFT/RIGHT jump ~a screenful at a time, both directions wrapping -- remapped
+// 2026-09-15 from a Left-only forward accelerator to match Browse/Price, Item Lookup,
+// Balances, Inventory, and the Admin Menu's paging convention.
+static void cb_list_page_left() {
+    if (_list_count == 0) return;
+    if (_list_cursor <= 0) {
+        _list_cursor = _list_count - 1;
+    } else {
+        _list_cursor -= LIST_PAGE;
+        if (_list_cursor < 0) _list_cursor = 0;
+    }
+    refresh_list_cursor();
+}
+
+static void cb_list_page_right() {
     if (_list_count == 0) return;
     if (_list_cursor >= _list_count - 1) {
         _list_cursor = 0;
@@ -115,10 +138,12 @@ static void cb_list_page_down() {
     refresh_list_cursor();
 }
 
+// Back returns to the Users submenu.
 static void cb_list_back() {
     screen_user_menu_push();
 }
 
+// Enter opens the detail view for the highlighted user.
 static void cb_list_select() {
     if (_list_count == 0) return;
     _detail_user_id = _list_users[_list_cursor].id;
@@ -128,6 +153,7 @@ static void cb_list_select() {
     build_detail_ui();
 }
 
+// Builds the ST_LIST UI, re-querying the current user list.
 static void build_list_ui() {
     lv_obj_t *list = lv_obj_create(_content);
     lv_obj_set_size(list, LV_PCT(100), 1);
@@ -165,14 +191,20 @@ static void build_list_ui() {
             lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
             _list_rows[i] = row;
 
+            // Name takes whatever space is left after the flag slot's fixed natural width
+            // (below) and ellipsizes instead of overflowing/wrapping — guarantees the row
+            // always fits regardless of how long an imported name turns out to be, rather
+            // than assuming a max length up front.
             char name_buf[NAME_FIELD_LEN * 2 + 2];
             snprintf(name_buf, sizeof(name_buf), "%s %s", u.first_name, u.last_name);
             lv_obj_t *name_lbl = lv_label_create(row);
+            lv_label_set_long_mode(name_lbl, LV_LABEL_LONG_DOT);
+            lv_obj_set_flex_grow(name_lbl, 1);
             lv_label_set_text(name_lbl, name_buf);
             lv_obj_set_style_text_color(name_lbl, lv_color_hex(u.active ? C_TEXT : C_DIM), LV_PART_MAIN);
             lv_obj_set_style_text_font(name_lbl, &lv_font_montserrat_16, LV_PART_MAIN);
 
-            char tag_buf[24];
+            char tag_buf[8];
             format_status_tag(tag_buf, sizeof(tag_buf), u);
             lv_obj_t *tag_lbl = lv_label_create(row);
             lv_label_set_text(tag_lbl, tag_buf);
@@ -182,10 +214,10 @@ static void build_list_ui() {
     }
 
     lv_obj_t *legend = ui_legend(_content);
-    char left_arrow[24], move_lbl[24];
-    snprintf(left_arrow, sizeof(left_arrow), "%s Next Screen", LV_SYMBOL_LEFT);
-    snprintf(move_lbl, sizeof(move_lbl), "%s%s Move", LV_SYMBOL_UP, LV_SYMBOL_DOWN);
-    ui_legend_row(legend, left_arrow, lv_color_hex(C_YELLOW), move_lbl, lv_color_hex(C_YELLOW));
+    char move_lbl[24], page_lbl[24];
+    snprintf(move_lbl, sizeof(move_lbl), "Move %s%s", LV_SYMBOL_UP, LV_SYMBOL_DOWN);
+    snprintf(page_lbl, sizeof(page_lbl), "Page %s%s", LV_SYMBOL_LEFT, LV_SYMBOL_RIGHT);
+    ui_legend_row(legend, move_lbl, lv_color_hex(C_YELLOW), page_lbl, lv_color_hex(C_YELLOW));
     ui_legend_row(legend, "Open", lv_color_hex(C_GREEN), "Back", lv_color_hex(C_RED));
 
     refresh_list_cursor();
@@ -193,7 +225,8 @@ static void build_list_ui() {
     ButtonHandlers h;
     h.up    = cb_list_up;
     h.down  = cb_list_down;
-    h.left  = cb_list_page_down;
+    h.left  = cb_list_page_left;
+    h.right = cb_list_page_right;
     h.enter = cb_list_select;
     h.back  = cb_list_back;
     buttons_set_handlers(h);
@@ -201,6 +234,7 @@ static void build_list_ui() {
 
 // ============ ST_DETAIL ============
 
+// Redraws the three detail row labels from the current user record.
 static void refresh_detail_row_labels() {
     const User *u = users_get_by_id(_detail_user_id);
     if (!u) return;
@@ -214,10 +248,9 @@ static void refresh_detail_row_labels() {
 
     snprintf(buf, sizeof(buf), "Locked: %s", u->active ? "No" : "Yes");
     lv_label_set_text(_detail_row_lbls[2], buf);
-
-    lv_label_set_text(_detail_row_lbls[3], "Reset Password");
 }
 
+// Highlights the currently-selected detail row.
 static void refresh_detail_cursor() {
     if (_detail_prev_cursor >= 0 && _detail_prev_cursor != _detail_cursor) {
         lv_obj_set_style_bg_opa(_detail_rows[_detail_prev_cursor], LV_OPA_TRANSP, LV_PART_MAIN);
@@ -226,22 +259,26 @@ static void refresh_detail_cursor() {
     _detail_prev_cursor = _detail_cursor;
 }
 
+// Up: moves the selection up one row, wrapping.
 static void cb_detail_up() {
     _detail_cursor = (_detail_cursor - 1 + DETAIL_ROW_COUNT) % DETAIL_ROW_COUNT;
     refresh_detail_cursor();
 }
 
+// Down: moves the selection down one row, wrapping.
 static void cb_detail_down() {
     _detail_cursor = (_detail_cursor + 1) % DETAIL_ROW_COUNT;
     refresh_detail_cursor();
 }
 
+// Back returns to the user list.
 static void cb_detail_back() {
     _state = ST_LIST;
     clear_content();
     build_list_ui();
 }
 
+// Enter acts on the selected row (opens the name wheel, or toggles Admin/Locked in place).
 static void cb_detail_enter() {
     const User *u = users_get_by_id(_detail_user_id);
     if (!u) return;
@@ -272,14 +309,10 @@ static void cb_detail_enter() {
             users_set_active(_detail_user_id, !u->active);
             refresh_detail_row_labels();
             break;
-        case 3:  // Reset Password -- confirm first, this one's not silently reversible
-            _state = ST_RESET_CONFIRM;
-            clear_content();
-            build_reset_confirm_ui();
-            break;
     }
 }
 
+// Builds the ST_DETAIL UI for the currently-selected user.
 static void build_detail_ui() {
     const User *u = users_get_by_id(_detail_user_id);
     header_set_title(u ? (String(u->first_name) + " " + String(u->last_name)).c_str() : "EDIT USER");
@@ -342,56 +375,12 @@ static void build_detail_ui() {
     buttons_set_handlers(h);
 }
 
-// ============ ST_RESET_CONFIRM ============
-
-static void cb_reset_confirm_yes() {
-    users_reset_password(_detail_user_id);
-    _state = ST_DETAIL;
-    clear_content();
-    build_detail_ui();
-}
-
-static void cb_reset_confirm_no() {
-    _state = ST_DETAIL;
-    clear_content();
-    build_detail_ui();
-}
-
-static void build_reset_confirm_ui() {
-    const User *u = users_get_by_id(_detail_user_id);
-
-    lv_obj_t *prompt = lv_label_create(_content);
-    lv_label_set_long_mode(prompt, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(prompt, LV_PCT(100));
-    lv_obj_set_style_text_color(prompt, lv_color_hex(C_TEXT), LV_PART_MAIN);
-    lv_obj_set_style_text_font(prompt, &lv_font_montserrat_20, LV_PART_MAIN);
-    lv_obj_set_style_text_align(prompt, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
-
-    char buf[80];
-    snprintf(buf, sizeof(buf), "Reset %s's password to the shared default?",
-             u ? u->first_name : "this user");
-    lv_label_set_text(prompt, buf);
-
-    lv_obj_t *grow = lv_obj_create(_content);
-    lv_obj_set_size(grow, LV_PCT(100), 1);
-    lv_obj_set_style_bg_opa(grow, LV_OPA_TRANSP, LV_PART_MAIN);
-    lv_obj_set_style_border_width(grow, 0, LV_PART_MAIN);
-    lv_obj_set_flex_grow(grow, 1);
-
-    lv_obj_t *legend = ui_legend(_content);
-    ui_legend_row(legend, "Yes", lv_color_hex(C_GREEN), "No", lv_color_hex(C_RED));
-
-    ButtonHandlers h;
-    h.enter = cb_reset_confirm_yes;
-    h.back  = cb_reset_confirm_no;
-    buttons_set_handlers(h);
-}
-
 // ============ ST_NAME_EDIT ============
 // Same widget as screen_enroll.cpp's build_input_ui() -- both rows always visible, only
 // the active one bright, Left/Right move within a row, Up/Down cycle the letter, Enter
 // advances (first -> last -> save), Back steps back a field / cancels without saving.
 
+// Reads one name-wheel row into a trimmed string.
 static void get_name(uint8_t row, char *out) {
     int last_real = -1;
     for (int i = 0; i < NAME_LEN; i++) {
@@ -402,12 +391,15 @@ static void get_name(uint8_t row, char *out) {
     out[last_real + 1] = '\0';
 }
 
+// True if the given name-wheel row has at least one real character typed.
 static bool name_row_valid(uint8_t row) {
     char buf[NAME_LEN + 1];
     get_name(row, buf);
     return buf[0] != '\0';
 }
 
+// Redraws one name-wheel cell -- bright + bordered if it's the cursor, dim if it's the
+// inactive row, normal otherwise.
 static void refresh_name_cell(uint8_t row, uint8_t col) {
     if (!_name_cell_lbl[row][col]) return;
 
@@ -428,12 +420,14 @@ static void refresh_name_cell(uint8_t row, uint8_t col) {
     lv_obj_set_style_border_color(_name_cell[row][col], lv_color_hex(C_CYAN), LV_PART_MAIN);
 }
 
+// Redraws every name-wheel cell.
 static void refresh_name_cells() {
     for (int row = 0; row < 2; row++)
         for (int col = 0; col < NAME_LEN; col++)
             refresh_name_cell(row, col);
 }
 
+// Left: moves the cursor left within the active row.
 static void cb_name_left() {
     if (_name_cursor > 0) {
         uint8_t old = _name_cursor;
@@ -443,6 +437,7 @@ static void cb_name_left() {
     }
 }
 
+// Right: moves the cursor right within the active row.
 static void cb_name_right() {
     if (_name_cursor < NAME_LEN - 1) {
         uint8_t old = _name_cursor;
@@ -452,16 +447,19 @@ static void cb_name_right() {
     }
 }
 
+// Up: cycles the letter under the cursor forward.
 static void cb_name_up() {
     _name_idx[_name_active_row][_name_cursor] = (_name_idx[_name_active_row][_name_cursor] + 1) % CHARSET_LEN;
     refresh_name_cell(_name_active_row, _name_cursor);
 }
 
+// Down: cycles the letter under the cursor backward.
 static void cb_name_down() {
     _name_idx[_name_active_row][_name_cursor] = (_name_idx[_name_active_row][_name_cursor] + CHARSET_LEN - 1) % CHARSET_LEN;
     refresh_name_cell(_name_active_row, _name_cursor);
 }
 
+// Enter: advances first name -> last name -> save.
 static void cb_name_next() {
     if (_name_active_row == 0) {
         if (!name_row_valid(0)) return;
@@ -494,6 +492,7 @@ static void cb_name_back() {
     }
 }
 
+// Builds one row of character cells for the name wheel.
 static void build_char_row(lv_obj_t *parent, uint8_t row) {
     lv_obj_t *row_cont = lv_obj_create(parent);
     lv_obj_set_size(row_cont, LV_PCT(100), LV_SIZE_CONTENT);
@@ -524,6 +523,7 @@ static void build_char_row(lv_obj_t *parent, uint8_t row) {
     }
 }
 
+// Builds the ST_NAME_EDIT UI.
 static void build_name_ui() {
     lv_obj_t *lbl1 = lv_label_create(_content);
     lv_label_set_text(lbl1, "First Name:");
@@ -571,6 +571,7 @@ static void build_name_ui() {
 
 // ============ public ============
 
+// Loads the Edit Users screen, always starting at ST_LIST.
 void screen_edit_users_push() {
     _state = ST_LIST;
     _list_cursor = 0;
@@ -589,6 +590,11 @@ void screen_edit_users_push() {
         lv_obj_set_style_border_width(_content, 0, LV_PART_MAIN);
         lv_obj_set_style_pad_hor(_content, 12, LV_PART_MAIN);
         lv_obj_set_style_pad_ver(_content, 12, LV_PART_MAIN);
+        // The footer legend is this flex column's last child, so pad_ver's bottom inset
+        // was also its distance from the true screen edge -- overridden separately to
+        // match the ~6px margin every explicitly-aligned legend elsewhere uses (see
+        // screen_item_edit.cpp's identical fix).
+        lv_obj_set_style_pad_bottom(_content, 6, LV_PART_MAIN);
         lv_obj_set_style_pad_row(_content, 8, LV_PART_MAIN);
         lv_obj_set_layout(_content, LV_LAYOUT_FLEX);
         lv_obj_set_flex_flow(_content, LV_FLEX_FLOW_COLUMN);

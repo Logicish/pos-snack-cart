@@ -4,18 +4,27 @@
 #include <Arduino.h>
 #include <sys/time.h>
 
-// GPIO5/6 — reserved for the DS3231. Originally GPIO21/22 (reserved 2026-08-17), moved
-// 2026-08-28: this specific physical board doesn't break out GPIO22, and GPIO48 (the
-// next candidate) is committed to the board's onboard WS2812 RGB LED — see
+/*
+  Author--- LogicishDesigns
+  Date----- September 2026
+  Function- Implements the DS3231 RTC integration declared in rtc.h, via Adafruit's
+            RTClib.
+*/
+
+// SDA=GPIO5/SCL=GPIO4 — reserved for the DS3231. Originally GPIO21/22 (reserved
+// 2026-08-17), moved 2026-08-28 to SDA=5/SCL=6 (this specific physical board doesn't
+// break out GPIO22, and GPIO48 — the next candidate — is committed to the board's
+// onboard WS2812 RGB LED), then shifted again 2026-09-13 to SDA=5/SCL=4 — see
 // snack_cart_pos.md's pin table for the full "verified safe pool" this was picked from.
-// 5/6 chosen partly for physical adjacency on the board's pinout. Passed explicitly to
-// Wire.begin() rather than relying on the board's default I2C pins, which may not match.
+// Passed explicitly to Wire.begin() rather than relying on the board's default I2C pins,
+// which may not match.
 #define RTC_SDA_PIN 5
-#define RTC_SCL_PIN 6
+#define RTC_SCL_PIN 4
 
 static RTC_DS3231 _rtc;
 static bool        _available = false;
 
+// Converts an RTClib DateTime into the ESP32's system clock via settimeofday().
 static void set_system_time_from(const DateTime &dt) {
     struct tm tmval = {};
     tmval.tm_year = dt.year() - 1900;
@@ -35,6 +44,7 @@ static void set_system_time_from(const DateTime &dt) {
     settimeofday(&tv, nullptr);
 }
 
+// Starts I2C, probes for the DS3231, and syncs the system clock from it if found and trustworthy.
 void rtc_init() {
     Wire.begin(RTC_SDA_PIN, RTC_SCL_PIN);
 
@@ -61,12 +71,15 @@ void rtc_init() {
                   now.year(), now.month(), now.day(), now.hour(), now.minute(), now.second());
 }
 
+// True if the DS3231 responded on I2C at boot.
 bool rtc_available() { return _available; }
 
+// True if the chip reports losing backup power since it was last set.
 bool rtc_lost_power() {
     return _available && _rtc.lostPower();
 }
 
+// Writes the current system time into the DS3231, so a manual correction survives a power cycle.
 void rtc_sync_from_system() {
     if (!_available) return;
 
@@ -78,6 +91,7 @@ void rtc_sync_from_system() {
     Serial.println("[RTC] Wrote current system time to DS3231");
 }
 
+// Reads the DS3231's own clock directly, bypassing the system clock.
 bool rtc_read(struct tm *out) {
     if (!_available) return false;
 

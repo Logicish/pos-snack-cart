@@ -1,4 +1,10 @@
 #pragma once
+
+/*
+  Author--- LogicishDesigns
+  Date----- September 2026
+  Function- Boot splash screen -- shows briefly, then falls through to IDLE.
+*/
 void screen_splash_push();
 // Same pattern as screen_screensaver_is_active() — used by main.cpp's loop() to ignore
 // scanner UART traffic while splash is up, so the boot-time GM65 config writes' ACK

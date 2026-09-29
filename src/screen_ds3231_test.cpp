@@ -9,22 +9,30 @@
 #include <Arduino.h>
 #include <time.h>
 
+/*
+  Author--- LogicishDesigns
+  Date----- September 2026
+  Function- Implements the DS3231 Test screen declared in screen_ds3231_test.h.
+*/
+
 #define FOOTER_H 52
 
 static lv_obj_t *_scr;
 static lv_obj_t *_lbl;
 
+// Formats a struct tm as "YYYY-MM-DD HH:MM:SS".
 static void format_tm(const struct tm &t, char *out, size_t out_len) {
     strftime(out, out_len, "%Y-%m-%d %H:%M:%S", &t);
 }
 
+// Rebuilds the whole report: chip status, RTC time, and system time.
 static void refresh_report() {
     String out;
 
     if (!rtc_available()) {
         out += "DS3231: NOT FOUND\n\n"
                "Not responding on I2C\n"
-               "(SDA=5, SCL=6). Check\n"
+               "(SDA=5, SCL=4). Check\n"
                "wiring/pull-ups/VCC.\n\n";
     } else {
         out += "DS3231: Found\n";
@@ -61,10 +69,12 @@ static void cb_sync_to() {
     refresh_report();
 }
 
+// Back returns to Advanced Tools.
 static void cb_back() {
     screen_admin_tools_push();
 }
 
+// Loads the DS3231 Test screen.
 void screen_ds3231_test_push() {
     if (!_scr) {
         _scr = lv_obj_create(nullptr);
