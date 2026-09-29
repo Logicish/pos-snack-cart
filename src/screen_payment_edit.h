@@ -16,3 +16,8 @@
 // Back (from the first field, or after Save) returns to the Payment Info submenu, not
 // Settings directly — this is now one level deeper than it used to be.
 void screen_payment_edit_push(const char *method, const char *display_label);
+
+// Consumes a scan while the editor's "Scan your QR code" step is up (2026-09-29) -- the
+// owner scans their own app's "my code" instead of typing the handle. Returns true if it
+// took the scan.
+bool screen_payment_edit_on_scan(const char *code);

@@ -5,6 +5,9 @@
 #include "theme.h"
 #include "buttons.h"
 #include "ui.h"
+#include "db.h"
+#include "payment_link.h"
+#include <sqlite3.h>
 #include <lvgl.h>
 #include <Arduino.h>
 
@@ -19,19 +22,43 @@
 
 static lv_obj_t *_scr;
 static lv_obj_t *_rows[MENU_COUNT];
+static lv_obj_t *_status[MENU_COUNT];  // "@emrem" / "Not set" line under each row
 static int        _cursor;
 static int        _prev_cursor = -1;
 
 static const char *MENU_LABELS[MENU_COUNT] = {
     "1. Venmo",
     "2. Zelle",
-    "3. Cashapp",
+    "3. Cash App",
 };
 
 // DB `method` key + display label passed to screen_payment_edit_push() for each row --
 // method strings are lowercase to match screen_pos.cpp's own payment_methods.method checks.
 static const char *METHOD_KEYS[MENU_COUNT]   = { "venmo", "zelle", "cashapp" };
-static const char *METHOD_LABELS[MENU_COUNT] = { "Venmo", "Zelle", "Cashapp" };
+static const char *METHOD_LABELS[MENU_COUNT] = { "Venmo", "Zelle", "Cash App" };
+
+// Rewrites each row's status line from payment_methods -- the saved account, or
+// "Not set". Refreshed on every visit so a save/delete shows immediately.
+static void refresh_status() {
+    for (int i = 0; i < MENU_COUNT; i++) {
+        char handle[PAYMENT_HANDLE_MAX] = "";
+        sqlite3_stmt *stmt;
+        if (db_handle() &&
+            sqlite3_prepare_v2(db_handle(), "SELECT handle FROM payment_methods WHERE method=?;", -1, &stmt, nullptr) == SQLITE_OK) {
+            sqlite3_bind_text(stmt, 1, METHOD_KEYS[i], -1, SQLITE_TRANSIENT);
+            if (sqlite3_step(stmt) == SQLITE_ROW) {
+                const unsigned char *hd = sqlite3_column_text(stmt, 0);
+                if (hd) strncpy(handle, (const char *)hd, sizeof(handle) - 1);
+            }
+            sqlite3_finalize(stmt);
+        }
+        char shown[80];
+        if (handle[0]) payment_display_handle(METHOD_KEYS[i], handle, shown, sizeof(shown));
+        else           snprintf(shown, sizeof(shown), "Not set");
+        lv_label_set_text(_status[i], shown);
+        lv_obj_set_style_text_color(_status[i], lv_color_hex(handle[0] ? C_GREEN : C_DIM), LV_PART_MAIN);
+    }
+}
 
 // Highlights the currently-selected row.
 static void refresh_cursor() {
@@ -92,6 +119,9 @@ void screen_payment_menu_push() {
             lv_obj_set_style_pad_all(row, 16, LV_PART_MAIN);
             lv_obj_set_style_bg_color(row, lv_color_hex(C_CYAN), LV_PART_MAIN);
             lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, LV_PART_MAIN);
+            lv_obj_set_style_pad_row(row, 4, LV_PART_MAIN);
+            lv_obj_set_layout(row, LV_LAYOUT_FLEX);
+            lv_obj_set_flex_flow(row, LV_FLEX_FLOW_COLUMN);
             lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
             _rows[i] = row;
 
@@ -99,6 +129,9 @@ void screen_payment_menu_push() {
             lv_label_set_text(lbl, MENU_LABELS[i]);
             lv_obj_set_style_text_color(lbl, lv_color_hex(C_TEXT), LV_PART_MAIN);
             lv_obj_set_style_text_font(lbl, &lv_font_montserrat_20, LV_PART_MAIN);
+
+            _status[i] = lv_label_create(row);
+            lv_obj_set_style_text_font(_status[i], &lv_font_montserrat_14, LV_PART_MAIN);
         }
 
         lv_obj_t *legend = ui_legend(_scr);
@@ -112,6 +145,7 @@ void screen_payment_menu_push() {
 
     header_set_visible(true);
     header_set_title("PAYMENT INFO");
+    refresh_status();
     refresh_cursor();
 
     ButtonHandlers h;

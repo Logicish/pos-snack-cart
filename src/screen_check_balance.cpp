@@ -7,6 +7,7 @@
 #include "ui.h"
 #include "checkouts.h"
 #include "db.h"
+#include "payment_link.h"
 #include <lvgl.h>
 #include <Arduino.h>
 #include <sqlite3.h>
@@ -19,7 +20,7 @@
   Date----- September 2026
   Function- Implements the Check Balance screen declared in screen_check_balance.h --
             two states, ST_LIST (the current Extras user's own outstanding checkouts)
-            and ST_QR (re-viewing one transaction's Venmo QR). Read-only throughout --
+            and ST_QR (re-viewing one transaction's payment QR). Read-only throughout --
             no Clear here, that stays admin-only (see screen_balances.cpp).
 */
 
@@ -46,23 +47,6 @@ static int        _qr_method_index;
 static void build_list_ui();
 static void build_qr_ui();
 
-// Percent-encodes everything except unreserved URL characters -- same duplicated helper
-// as screen_pos.cpp's url_encode(), per this codebase's established per-file
-// self-contained convention rather than exposing screen_pos.cpp's internals.
-static void url_encode(const char *in, char *out, size_t out_len) {
-    size_t o = 0;
-    for (size_t i = 0; in[i] != '\0' && o + 4 < out_len; i++) {
-        unsigned char c = (unsigned char)in[i];
-        if (isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') {
-            out[o++] = (char)c;
-        } else {
-            snprintf(out + o, out_len - o, "%%%02X", c);
-            o += 3;
-        }
-    }
-    out[o] = '\0';
-}
-
 // Returns how many payment_methods rows are enabled -- same as screen_pos.cpp's
 // count_enabled_payment_methods(), duplicated per this codebase's established per-file
 // self-contained convention rather than exposing screen_pos.cpp's internals.
@@ -77,24 +61,28 @@ static int count_enabled_payment_methods() {
 }
 
 // Reads the index'th enabled payment method (venmo always sorted first) -- same query
-// and priority order as screen_pos.cpp's get_payment_method_at(), just without the
-// display_name column, which this read-only re-view has no use for.
+// and priority order as screen_pos.cpp's get_payment_method_at(). display_name is needed
+// since 2026-09-29: the Zelle QR payload includes the owner's name.
 static bool get_payment_method_at(int index, char *method, size_t method_len,
+                                   char *owner, size_t owner_len,
                                    char *handle, size_t handle_len) {
     method[0] = '\0';
+    owner[0]  = '\0';
     handle[0] = '\0';
 
     sqlite3_stmt *stmt;
     bool have_handle = false;
     const char *sql =
-        "SELECT method, handle FROM payment_methods WHERE enabled = 1 "
+        "SELECT method, handle, display_name FROM payment_methods WHERE enabled = 1 "
         "ORDER BY CASE WHEN method = 'venmo' THEN 0 ELSE 1 END, method LIMIT 1 OFFSET ?;";
     if (sqlite3_prepare_v2(db_handle(), sql, -1, &stmt, nullptr) == SQLITE_OK) {
         sqlite3_bind_int(stmt, 1, index);
         if (sqlite3_step(stmt) == SQLITE_ROW) {
             const unsigned char *mt = sqlite3_column_text(stmt, 0);
             const unsigned char *hd = sqlite3_column_text(stmt, 1);
+            const unsigned char *dn = sqlite3_column_text(stmt, 2);
             if (mt) { strncpy(method, (const char *)mt, method_len - 1); method[method_len - 1] = '\0'; }
+            if (dn) { strncpy(owner, (const char *)dn, owner_len - 1); owner[owner_len - 1] = '\0'; }
             if (hd && hd[0] != '\0') {
                 strncpy(handle, (const char *)hd, handle_len - 1);
                 handle[handle_len - 1] = '\0';
@@ -273,8 +261,8 @@ static void build_list_ui() {
     buttons_set_handlers(h);
 }
 
-// Builds the ST_QR UI for _data[_cursor] -- same Venmo deep-link format screen_pos.cpp's
-// Payment screen uses, just built from a real stored checkout instead of a predicted one.
+// Builds the ST_QR UI for _data[_cursor] -- same payment_link.cpp QR the Payment screen
+// shows, just built from a real stored checkout id instead of a predicted one.
 static void build_qr_ui() {
     const OutstandingCheckout &c = _data[_cursor];
 
@@ -286,43 +274,24 @@ static void build_qr_ui() {
     if (method_count > 0 && _qr_method_index >= method_count) _qr_method_index = 0;
 
     char method[16] = "";
-    char handle[48] = "";
+    char owner[32]  = "";
+    char handle[PAYMENT_HANDLE_MAX] = "";
     bool have_method = method_count > 0 &&
-        get_payment_method_at(_qr_method_index, method, sizeof(method), handle, sizeof(handle));
+        get_payment_method_at(_qr_method_index, method, sizeof(method), owner, sizeof(owner),
+                              handle, sizeof(handle));
 
-    if (have_method && strcmp(method, "venmo") == 0) {
-        char note_raw[32];
-        snprintf(note_raw, sizeof(note_raw), "#%d Snacks!!", c.id);
-        char note_encoded[96];
-        url_encode(note_raw, note_encoded, sizeof(note_encoded));
-
-        char url[192];
-        snprintf(url, sizeof(url), "https://venmo.com/%s?txn=pay&amount=%d.%02d&note=%s",
-                 handle, c.total_price_cents / 100, c.total_price_cents % 100, note_encoded);
-
-        lv_obj_t *qr_row = lv_obj_create(_content);
-        lv_obj_set_size(qr_row, LV_PCT(100), LV_SIZE_CONTENT);
-        lv_obj_set_style_bg_opa(qr_row, LV_OPA_TRANSP, LV_PART_MAIN);
-        lv_obj_set_style_border_width(qr_row, 0, LV_PART_MAIN);
-        lv_obj_set_style_pad_all(qr_row, 0, LV_PART_MAIN);
-        lv_obj_set_layout(qr_row, LV_LAYOUT_FLEX);
-        lv_obj_set_flex_flow(qr_row, LV_FLEX_FLOW_ROW);
-        lv_obj_set_flex_align(qr_row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-        lv_obj_clear_flag(qr_row, LV_OBJ_FLAG_SCROLLABLE);
-
-        lv_obj_t *qr = lv_qrcode_create(qr_row, 200, lv_color_hex(C_BG), lv_color_hex(C_TEXT));
-        lv_qrcode_update(qr, url, strlen(url));
-
-        lv_obj_t *scan_hint = lv_label_create(_content);
-        lv_label_set_text(scan_hint, "Use your phone's Camera app\n(not the Venmo app's scanner)");
-        lv_label_set_long_mode(scan_hint, LV_LABEL_LONG_WRAP);
-        lv_obj_set_style_text_color(scan_hint, lv_color_hex(C_DIM), LV_PART_MAIN);
-        lv_obj_set_style_text_font(scan_hint, &lv_font_montserrat_14, LV_PART_MAIN);
-        lv_obj_set_width(scan_hint, LV_PCT(100));
-        lv_obj_set_style_text_align(scan_hint, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
-    } else if (have_method) {
-        char fallback_buf[64];
-        snprintf(fallback_buf, sizeof(fallback_buf), "%s: %s", method, handle);
+    if (!have_method) {
+        lv_obj_t *warn = lv_label_create(_content);
+        lv_label_set_text(warn, "Payment info not set yet\n(Admin > Settings > Payment Info)");
+        lv_label_set_long_mode(warn, LV_LABEL_LONG_WRAP);
+        lv_obj_set_style_text_color(warn, lv_color_hex(C_ORANGE), LV_PART_MAIN);
+        lv_obj_set_style_text_font(warn, &lv_font_montserrat_16, LV_PART_MAIN);
+        lv_obj_set_width(warn, LV_PCT(100));
+        lv_obj_set_style_text_align(warn, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+    } else if (!payment_add_qr(_content, method, handle, owner, c.total_price_cents, c.id)) {
+        // A method with no QR format (or a payload too long to fit) -- show it as text.
+        char fallback_buf[80];
+        snprintf(fallback_buf, sizeof(fallback_buf), "%s: %s", payment_method_label(method), handle);
         lv_obj_t *fallback = lv_label_create(_content);
         lv_label_set_text(fallback, fallback_buf);
         lv_label_set_long_mode(fallback, LV_LABEL_LONG_WRAP);
@@ -330,14 +299,6 @@ static void build_qr_ui() {
         lv_obj_set_style_text_font(fallback, &lv_font_montserrat_20, LV_PART_MAIN);
         lv_obj_set_width(fallback, LV_PCT(100));
         lv_obj_set_style_text_align(fallback, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
-    } else {
-        lv_obj_t *warn = lv_label_create(_content);
-        lv_label_set_text(warn, "Payment info not set yet\n(set via web Admin)");
-        lv_label_set_long_mode(warn, LV_LABEL_LONG_WRAP);
-        lv_obj_set_style_text_color(warn, lv_color_hex(C_ORANGE), LV_PART_MAIN);
-        lv_obj_set_style_text_font(warn, &lv_font_montserrat_16, LV_PART_MAIN);
-        lv_obj_set_width(warn, LV_PCT(100));
-        lv_obj_set_style_text_align(warn, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
     }
 
     char total_buf[24];

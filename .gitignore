@@ -21,3 +21,11 @@ temp_resources/
 # Dead backup files from the pre-SQLite LittleFS architecture -- superseded, not
 # compiled, not current source.
 *.bak
+
+# Personal Claude Code settings (permission rules) -- not project source
+.claude/settings.local.json
+
+# Real SD-card DB snapshots -- contain real names/badges/Venmo handle, never commit
+db_backups/
+*.db
+*.db-journal

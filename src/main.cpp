@@ -13,6 +13,7 @@
 #include "screen_splash.h"
 #include "screen_sd_error.h"
 #include "screen_setup_wizard.h"
+#include "screen_payment_edit.h"
 #include "screen_item_edit.h"
 #include "screen_restock.h"
 #include "screen_add_item.h"
@@ -165,6 +166,7 @@ static void build_idle_screen() {
 // unknown -> turned away" behavior if nothing claims it.
 static void on_scan(const char *badge_id) {
     if (screen_setup_wizard_on_scan(badge_id)) return;  // first-boot/recovery wizard, if active
+    if (screen_payment_edit_on_scan(badge_id)) return;  // Payment Info: owner scanning their own payment QR
     if (screen_enroll_on_scan(badge_id)) return;
     if (screen_pos_on_scan(badge_id)) return;  // TRANSACTION screen active — treat as an item UPC, not a badge
     if (screen_restock_on_scan(badge_id)) return;

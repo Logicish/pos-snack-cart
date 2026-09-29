@@ -144,7 +144,7 @@ bool db_init() {
         "  upc         TEXT    UNIQUE,"   // deprecated 2026-08-25, see item_upcs below — left in
                                            // place rather than dropped (DROP COLUMN support on
                                            // this SQLite build is unconfirmed and not worth
-                                           // risking), just no longer read or written by new code
+                                           // risking), never read or written anymore
         "  name        TEXT    NOT NULL,"
         "  price_cents INTEGER NOT NULL,"
         "  stocked     INTEGER NOT NULL DEFAULT 0,"
@@ -189,14 +189,11 @@ bool db_init() {
         "  upc     TEXT    UNIQUE NOT NULL"
         ");"
     );
-    // One-time (but safe to re-run every boot — UNIQUE on upc makes it a no-op once migrated)
-    // copy of any legacy items.upc value into the new table. Deliberately INSERT OR IGNORE,
-    // not UPSERT — see the 2026-08-24 note above on why ON CONFLICT...DO UPDATE silently
-    // no-ops on this SQLite build; OR IGNORE is the older, universally-supported mechanism.
-    exec(
-        "INSERT OR IGNORE INTO item_upcs (item_id, upc) "
-        "SELECT id, upc FROM items WHERE upc IS NOT NULL AND upc != '';"
-    );
+    // The every-boot items.upc -> item_upcs copy (2026-08-25 migration) was removed
+    // 2026-09-29. Every real DB was migrated long ago, and re-running it each boot
+    // silently re-linked any barcode an admin had unlinked in Item Edit. The real card's
+    // legacy items.upc values were cleared by hand the same day; items.upc stays in the
+    // schema only because this build's DROP COLUMN support is unconfirmed.
 
     // One row per checkout ("Finish" press), NOT per item scan — Venmo pays per-checkout.
     // id IS the transaction number (free from AUTOINCREMENT). cleared_at is UPDATE-only,

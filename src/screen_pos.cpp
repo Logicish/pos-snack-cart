@@ -7,6 +7,7 @@
 #include "db.h"
 #include "buttons.h"
 #include "ui.h"
+#include "payment_link.h"
 #include <lvgl.h>
 #include <Arduino.h>
 #include <string.h>
@@ -85,23 +86,6 @@ static void build_payment_ui();
 // Formats an integer cents value as "$X.XX".
 static void format_cents(int cents, char *out, size_t out_len) {
     snprintf(out, out_len, "$%d.%02d", cents / 100, cents % 100);
-}
-
-// Percent-encodes everything except unreserved URL characters. Needed once the Venmo
-// note started including '#'/'!'/spaces (2026-08-24) — '#' in particular would otherwise
-// truncate the URL at the fragment marker and silently drop the amount/note entirely.
-static void url_encode(const char *in, char *out, size_t out_len) {
-    size_t o = 0;
-    for (size_t i = 0; in[i] != '\0' && o + 4 < out_len; i++) {
-        unsigned char c = (unsigned char)in[i];
-        if (isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') {
-            out[o++] = (char)c;
-        } else {
-            snprintf(out + o, out_len - o, "%%%02X", c);
-            o += 3;
-        }
-    }
-    out[o] = '\0';
 }
 
 // ── cart mutation ─────────────────────────────────────────────────────────────────
@@ -643,7 +627,7 @@ static int predict_next_checkout_id() {
     return next_id;
 }
 
-// Builds the ST_PAYMENT UI -- a Venmo QR code, a plain-text fallback for another method,
+// Builds the ST_PAYMENT UI -- a payment QR code (payment_link.cpp), a plain-text fallback,
 // or a "not set up" warning, plus the total and footer.
 static void build_payment_ui() {
     int method_count = count_enabled_payment_methods();
@@ -651,7 +635,7 @@ static void build_payment_ui() {
 
     char method[16] = "";
     char owner[32]  = "";
-    char handle[48] = "";
+    char handle[PAYMENT_HANDLE_MAX] = "";
     bool have_method = method_count > 0 &&
         get_payment_method_at(_payment_method_index, method, sizeof(method), owner, sizeof(owner), handle, sizeof(handle));
     if (owner[0] == '\0') strncpy(owner, "Owner", sizeof(owner));
@@ -668,51 +652,20 @@ static void build_payment_ui() {
     char total_price[12];
     format_cents(_total_cents, total_price, sizeof(total_price));
 
-    if (have_method && strcmp(method, "venmo") == 0) {
-        // Note includes the predicted transaction id so the owner can match a Venmo
-        // payment back to a specific checkout at a glance (e.g. two checkouts landing on
-        // the same total on different days — see checkouts schema note on why that
-        // matters). URL-encoded since '#'/'!'/space all need it — '#' especially, since
-        // unencoded it would truncate the URL at the fragment marker.
-        char note_raw[32];
-        snprintf(note_raw, sizeof(note_raw), "#%d Snacks!!", predict_next_checkout_id());
-        char note_encoded[96];
-        url_encode(note_raw, note_encoded, sizeof(note_encoded));
-
-        char url[192];
-        snprintf(url, sizeof(url), "https://venmo.com/%s?txn=pay&amount=%d.%02d&note=%s",
-                 handle, _total_cents / 100, _total_cents % 100, note_encoded);
-
-        lv_obj_t *qr_row = lv_obj_create(_content);
-        lv_obj_set_size(qr_row, LV_PCT(100), LV_SIZE_CONTENT);
-        lv_obj_set_style_bg_opa(qr_row, LV_OPA_TRANSP, LV_PART_MAIN);
-        lv_obj_set_style_border_width(qr_row, 0, LV_PART_MAIN);
-        lv_obj_set_style_pad_all(qr_row, 0, LV_PART_MAIN);
-        lv_obj_set_layout(qr_row, LV_LAYOUT_FLEX);
-        lv_obj_set_flex_flow(qr_row, LV_FLEX_FLOW_ROW);
-        lv_obj_set_flex_align(qr_row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-        lv_obj_clear_flag(qr_row, LV_OBJ_FLAG_SCROLLABLE);
-
-        lv_obj_t *qr = lv_qrcode_create(qr_row, 200, lv_color_hex(C_BG), lv_color_hex(C_TEXT));
-        lv_qrcode_update(qr, url, strlen(url));
-
-        // Venmo's own in-app scanner is built to scan another Venmo user's in-app QR
-        // code, not a plain link like this one — confirmed 2026-08-24 on real hardware, a
-        // real test scan wasn't recognized until switching to the phone's regular Camera
-        // app instead. This QR is a standard URL-encoded QR any camera/QR reader handles
-        // correctly.
-        lv_obj_t *scan_hint = lv_label_create(_content);
-        lv_label_set_text(scan_hint, "Use your phone's Camera app\n(not the Venmo app's scanner)");
-        lv_label_set_long_mode(scan_hint, LV_LABEL_LONG_WRAP);
-        lv_obj_set_style_text_color(scan_hint, lv_color_hex(C_DIM), LV_PART_MAIN);
-        lv_obj_set_style_text_font(scan_hint, &lv_font_montserrat_14, LV_PART_MAIN);
-        lv_obj_set_width(scan_hint, LV_PCT(100));
-        lv_obj_set_style_text_align(scan_hint, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
-    } else if (have_method) {
-        // A non-venmo method exists (e.g. a future Zelle row) but doesn't have a defined
-        // deep-link/QR scheme wired up yet — show the handle as plain text instead.
-        char fallback_buf[64];
-        snprintf(fallback_buf, sizeof(fallback_buf), "%s: %s", method, handle);
+    // Venmo/Cash App/Zelle QR codes all come from payment_link.cpp (2026-09-29). Only
+    // Venmo's note carries the predicted transaction number; the other two can't hold one.
+    if (!have_method) {
+        lv_obj_t *warn = lv_label_create(_content);
+        lv_label_set_text(warn, "Payment info not set yet\n(Admin > Settings > Payment Info)");
+        lv_label_set_long_mode(warn, LV_LABEL_LONG_WRAP);
+        lv_obj_set_style_text_color(warn, lv_color_hex(C_ORANGE), LV_PART_MAIN);
+        lv_obj_set_style_text_font(warn, &lv_font_montserrat_16, LV_PART_MAIN);
+        lv_obj_set_width(warn, LV_PCT(100));
+        lv_obj_set_style_text_align(warn, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+    } else if (!payment_add_qr(_content, method, handle, owner, _total_cents, predict_next_checkout_id())) {
+        // A method with no QR format (or a payload too long to fit) -- show it as text.
+        char fallback_buf[80];
+        snprintf(fallback_buf, sizeof(fallback_buf), "%s: %s", payment_method_label(method), handle);
         lv_obj_t *fallback = lv_label_create(_content);
         lv_label_set_text(fallback, fallback_buf);
         lv_label_set_long_mode(fallback, LV_LABEL_LONG_WRAP);
@@ -720,14 +673,6 @@ static void build_payment_ui() {
         lv_obj_set_style_text_font(fallback, &lv_font_montserrat_20, LV_PART_MAIN);
         lv_obj_set_width(fallback, LV_PCT(100));
         lv_obj_set_style_text_align(fallback, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
-    } else {
-        lv_obj_t *warn = lv_label_create(_content);
-        lv_label_set_text(warn, "Payment info not set yet\n(set via web Admin)");
-        lv_label_set_long_mode(warn, LV_LABEL_LONG_WRAP);
-        lv_obj_set_style_text_color(warn, lv_color_hex(C_ORANGE), LV_PART_MAIN);
-        lv_obj_set_style_text_font(warn, &lv_font_montserrat_16, LV_PART_MAIN);
-        lv_obj_set_width(warn, LV_PCT(100));
-        lv_obj_set_style_text_align(warn, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
     }
 
     char total_buf[24];
@@ -748,8 +693,7 @@ static void build_payment_ui() {
     // Footer — same 2-line color-coded legend style as TRANSACTION's, by request: Left/
     // Right on top (arrows), Enter/Back (green/red) below. Left returns to the cart
     // without cancelling (distinct from the red Cancel/Logout); Right cycles payment
-    // methods, defaulting to venmo — currently a no-op in practice since it's the only
-    // one that exists, but wired for whenever a second one does.
+    // methods (Venmo first, then Cash App/Zelle if enabled).
     lv_obj_t *legend = ui_legend(_content);
     char left_arrow[16], right_arrow[24];
     snprintf(left_arrow, sizeof(left_arrow), "%s Back", LV_SYMBOL_LEFT);
