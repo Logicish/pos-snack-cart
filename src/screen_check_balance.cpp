@@ -280,6 +280,20 @@ static void build_qr_ui() {
         get_payment_method_at(_qr_method_index, method, sizeof(method), owner, sizeof(owner),
                               handle, sizeof(handle));
 
+    // Same tabs + "Payment to" as the Payment screen -- Right cycles methods here too.
+    if (have_method) {
+        payment_add_tabs(_content, _qr_method_index);
+
+        char to_buf[64];
+        snprintf(to_buf, sizeof(to_buf), "Payment to: %s", owner[0] ? owner : "Owner");
+        lv_obj_t *to_lbl = lv_label_create(_content);
+        lv_label_set_text(to_lbl, to_buf);
+        lv_obj_set_style_text_color(to_lbl, lv_color_hex(C_TEXT), LV_PART_MAIN);
+        lv_obj_set_style_text_font(to_lbl, &lv_font_montserrat_16, LV_PART_MAIN);
+        lv_obj_set_width(to_lbl, LV_PCT(100));
+        lv_obj_set_style_text_align(to_lbl, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+    }
+
     if (!have_method) {
         lv_obj_t *warn = lv_label_create(_content);
         lv_label_set_text(warn, "Payment info not set yet\n(Admin > Settings > Payment Info)");

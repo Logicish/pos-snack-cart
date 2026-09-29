@@ -640,6 +640,9 @@ static void build_payment_ui() {
         get_payment_method_at(_payment_method_index, method, sizeof(method), owner, sizeof(owner), handle, sizeof(handle));
     if (owner[0] == '\0') strncpy(owner, "Owner", sizeof(owner));
 
+    // Tabs show which method this QR is for and what "Other Payment" goes to next.
+    payment_add_tabs(_content, _payment_method_index);
+
     char to_buf[64];
     snprintf(to_buf, sizeof(to_buf), "Payment to: %s", owner);
     lv_obj_t *to_lbl = lv_label_create(_content);

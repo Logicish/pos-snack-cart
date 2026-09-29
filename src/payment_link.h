@@ -46,6 +46,11 @@ bool payment_zelle_decode(const char *url, char *token, size_t token_len,
 bool payment_add_qr(lv_obj_t *parent, const char *method, const char *handle,
                     const char *owner, int total_cents, int txn_id);
 
+// Adds a row of tabs, one per enabled payment method, in the same order "Other Payment"
+// cycles through them, with active_index highlighted. Adds nothing when fewer than two
+// methods are enabled.
+void payment_add_tabs(lv_obj_t *parent, int active_index);
+
 // Human-readable method name for on-screen text ("Venmo", "Cash App", "Zelle").
 const char *payment_method_label(const char *method);
 

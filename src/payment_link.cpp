@@ -1,5 +1,7 @@
 #include "payment_link.h"
 #include "theme.h"
+#include "db.h"
+#include <sqlite3.h>
 #include <Arduino.h>
 #include <mbedtls/base64.h>
 #include <ctype.h>
@@ -187,6 +189,49 @@ const char *payment_method_label(const char *method) {
     return method;
 }
 
+void payment_add_tabs(lv_obj_t *parent, int active_index) {
+    // Same filter + ORDER BY as the screens' get_payment_method_at(), so tab i is exactly
+    // what "Other Payment" lands on at index i.
+    char methods[4][16];
+    int count = 0;
+    sqlite3_stmt *stmt;
+    if (db_handle() && sqlite3_prepare_v2(db_handle(),
+            "SELECT method FROM payment_methods WHERE enabled = 1 "
+            "ORDER BY CASE WHEN method = 'venmo' THEN 0 ELSE 1 END, method;",
+            -1, &stmt, nullptr) == SQLITE_OK) {
+        while (count < 4 && sqlite3_step(stmt) == SQLITE_ROW) {
+            const unsigned char *mt = sqlite3_column_text(stmt, 0);
+            snprintf(methods[count++], sizeof(methods[0]), "%s", mt ? (const char *)mt : "");
+        }
+        sqlite3_finalize(stmt);
+    }
+    if (count < 2) return;  // a single tab says nothing -- the QR hint already names it
+
+    lv_obj_t *strip = lv_obj_create(parent);
+    lv_obj_set_size(strip, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(strip, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_border_width(strip, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(strip, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_column(strip, 6, LV_PART_MAIN);
+    lv_obj_set_layout(strip, LV_LAYOUT_FLEX);
+    lv_obj_set_flex_flow(strip, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(strip, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_clear_flag(strip, LV_OBJ_FLAG_SCROLLABLE);
+
+    for (int i = 0; i < count; i++) {
+        bool active = (i == active_index);
+        lv_obj_t *tab = lv_label_create(strip);
+        lv_label_set_text(tab, payment_method_label(methods[i]));
+        lv_obj_set_style_text_font(tab, &lv_font_montserrat_16, LV_PART_MAIN);
+        lv_obj_set_style_text_color(tab, lv_color_hex(active ? C_CYAN : C_DIM), LV_PART_MAIN);
+        lv_obj_set_style_pad_hor(tab, 10, LV_PART_MAIN);
+        lv_obj_set_style_pad_ver(tab, 4, LV_PART_MAIN);
+        lv_obj_set_style_radius(tab, 12, LV_PART_MAIN);
+        lv_obj_set_style_border_color(tab, lv_color_hex(C_CYAN), LV_PART_MAIN);
+        lv_obj_set_style_border_width(tab, active ? 2 : 0, LV_PART_MAIN);
+    }
+}
+
 void payment_display_handle(const char *method, const char *handle, char *out, size_t out_len) {
     char name_unused[48];
     if (strcmp(method, "zelle") == 0 &&
@@ -215,13 +260,16 @@ bool payment_add_qr(lv_obj_t *parent, const char *method, const char *handle,
     lv_obj_t *qr = lv_qrcode_create(qr_row, 200, lv_color_hex(C_BG), lv_color_hex(C_TEXT));
     lv_qrcode_update(qr, url, strlen(url));
 
-    // Venmo: its in-app scanner only reads other users' in-app codes, not a plain link
-    // (confirmed on real hardware 2026-08-24). Zelle: the phone camera just opens a
-    // "find your bank" page; the bank app's Zelle scanner is what reads this payload.
+    // Same two-line shape for every method (owner request 2026-09-29): what to scan with,
+    // then the common mistake in parentheses. Venmo: its in-app scanner only reads other
+    // users' in-app codes, not a plain link (confirmed on real hardware 2026-08-24).
+    // Zelle: the phone camera just opens a "find your bank" page; the bank app's Zelle
+    // scanner is what reads this payload.
     const char *hint =
-        strcmp(method, "venmo") == 0 ? "Use your phone's Camera app\n(not the Venmo app's scanner)" :
-        strcmp(method, "zelle") == 0 ? "Scan with the Zelle scanner\nin your bank's app" :
-                                       "Use your phone's Camera app";
+        strcmp(method, "venmo") == 0   ? "Scan with your phone's Camera app\n(not the Venmo app's scanner)" :
+        strcmp(method, "cashapp") == 0 ? "Scan with your phone's Camera app\n(it opens Cash App for you)" :
+        strcmp(method, "zelle") == 0   ? "Scan with your bank app's Zelle scanner\n(not your phone's Camera app)" :
+                                         "Scan with your phone's Camera app";
     lv_obj_t *scan_hint = lv_label_create(parent);
     lv_label_set_text(scan_hint, hint);
     lv_label_set_long_mode(scan_hint, LV_LABEL_LONG_WRAP);
