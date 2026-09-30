@@ -10,6 +10,7 @@
 */
 
 #define GAME_KEY_LAGGY_FISH "laggy_fish"
+#define GAME_KEY_SLIDE_FREE "slide_free"
 
 // This user's best for `game`, 0 if they've never finished a run (or the DB is down).
 int game_scores_get_best(int user_id, const char *game);

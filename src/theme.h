@@ -48,5 +48,5 @@
 #define C_DIM     0x4A4A4A
 #define C_RED     0xF44336  /* physical Back-button color cue — distinct from the amber warning color */
 #define C_YELLOW  0xFFEB3B  /* physical Up/Down/Left/Right button color cue, added 2026-08-26 — same Material 500 family as C_GREEN/C_RED */
-#define C_BLUE    0x2196F3  /* added 2026-09-15 for Castle Defense's color-count ramp — Material 500, same family as the rest */
+#define C_BLUE    0x2196F3  /* added 2026-09-15 (Castle Defense, since removed); Slide Free block color now — Material 500, same family as the rest */
 #define C_PURPLE  0x9C27B0  /* same — picked over pink specifically since pink reads too close to C_RED at a glance */

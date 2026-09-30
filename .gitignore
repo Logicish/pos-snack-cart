@@ -29,3 +29,8 @@ temp_resources/
 db_backups/
 *.db
 *.db-journal
+
+# tools/tilt_lab.py working files -- the 2500-board pool is regenerable (gen/regrade);
+# the shipped boards live in tools/slidefree/ and ARE committed
+tools/puzzles*.json
+__pycache__/

@@ -26,7 +26,7 @@ void screen_extras_push();             // Start screen's Left arrow -- badge-gat
 void screen_extras_return_to_list();   // Extras sub-screens' Back target -- re-shows the
                                         // already-identified menu without a re-scan
 void screen_laggy_fish_push();         // Extras entry: the minigame
-void screen_castle_defense_push();     // Extras entry: the archer-vs-color-horde minigame
+void screen_slide_free_push();         // Extras entry: the tilt puzzle (replaced Castle Defense)
 void screen_check_balance_push();      // Extras entry: a user's own outstanding balance
 
 // 2026-08-28 Admin Menu reorg — these two submenus are the "Back" target for several

@@ -253,7 +253,7 @@ bool db_init() {
     // Settings form instead (writes straight to this table, no firmware rebuild needed).
 
     // Extras minigame high scores, 2026-09-30 — one row per user per game, best score
-    // only (no history). `game` is a short fixed key ('laggy_fish', later 'castle_defense')
+    // only (no history). `game` is a short fixed key ('laggy_fish', 'slide_free')
     // so every game shares this one table instead of each growing its own. Brand-new
     // table, so CREATE TABLE IF NOT EXISTS covers existing cards — no ALTER involved.
     exec(

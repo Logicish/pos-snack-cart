@@ -35,7 +35,7 @@ static int         _user_id = -1;
 static const char *MENU_LABELS[MENU_COUNT] = {
     "1. Check Balance",
     "2. Laggy Fish",
-    "3. Castle Defense",
+    "3. Slide Free",
     "4. CYOA Demo",
 };
 
@@ -80,7 +80,7 @@ static void cb_enter() {
     switch (_cursor) {
         case 0: screen_check_balance_push();  break;
         case 1: screen_laggy_fish_push();     break;
-        case 2: screen_castle_defense_push(); break;
+        case 2: screen_slide_free_push();     break;
         case 3: screen_cyoa_push(&STORY_TEST); break;
     }
 }
