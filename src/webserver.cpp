@@ -997,7 +997,11 @@ static String render_admin_page(AsyncWebServerRequest *request) {
     html += "<tr><td>Free memory</td><td>" + String(ESP.getFreeHeap() / 1024) + " KB</td></tr>";
     html += "<tr><td>Phones connected</td><td>" + String(WiFi.softAPgetStationNum()) + "</td></tr>";
     html += "</table><form method='POST' action='/admin/backup'><button>Back up now</button></form> "
-            "<span class='muted'>Also happens automatically when the Web Portal closes.</span></div>";
+            "<a class='btn' href='/admin-download-db'>Download database</a>"
+            "<p class='muted'>Back up now saves a copy on the SD card (also automatic when the Web "
+            "Portal closes). Download database saves a copy to this phone. If the SD card ever "
+            "fails, copy that file onto a new card named pos.db and everything comes back as of "
+            "that day.</p></div>";
 
     return render_page("Admin", "Admin", html);
 }
@@ -1055,6 +1059,27 @@ static void handle_admin_passwords(AsyncWebServerRequest *request) {
     wifi.trim();
     if (wifi.length() && !webserver_set_ap_password(wifi.c_str())) { request->redirect("/admin?err=wifipw"); return; }
     request->redirect("/admin?ok=pw");
+}
+
+// GET /admin-download-db -- an off-card copy of the whole database, restorable by copying
+// it onto a new SD card as pos.db (2026-09-29: both on-card copies die with the card). It
+// takes a fresh backup first and sends that, not the live pos.db, which could be mid-write
+// if a save lands at the same moment. Own path: "/admin" would catch "/admin/...".
+static void handle_admin_download_db(AsyncWebServerRequest *request) {
+    session_timer_reset();
+    if (!db_backup_now()) {
+        request->send(500, "text/plain", "Couldn't copy the database. Check the SD card.");
+        return;
+    }
+    time_t now = time(nullptr);
+    struct tm tmval;
+    gmtime_r(&now, &tmval);
+    char name[40];
+    strftime(name, sizeof(name), "/snackcart-db-%Y-%m-%d.db", &tmval);
+    // File-based response: the library names the download after `name` and sets
+    // Content-Disposition itself -- never add a second one (see handle_report_download()).
+    File db = SD.open("/pos_backup.db");
+    request->send(request->beginResponse(db, name, "application/octet-stream", true));
 }
 
 // POST /admin/backup -- copies pos.db to pos_backup.db right now.
@@ -1121,6 +1146,7 @@ void webserver_init() {
     _server.on("/user/toggle", HTTP_POST, handle_user_toggle);
     _server.on("/user/edit", HTTP_POST, handle_user_edit);
     _server.on("/user/delete", HTTP_POST, handle_user_delete);
+    _server.on("/admin-download-db", HTTP_GET, handle_admin_download_db);  // not "/admin/..." -- "/admin" would catch it
     _server.on("/admin", HTTP_GET, handle_admin);
     _server.on("/admin/settings", HTTP_POST, handle_admin_settings);
     _server.on("/admin/clock", HTTP_POST, handle_admin_clock);
