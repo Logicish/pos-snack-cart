@@ -33,6 +33,7 @@
 #include "backlight.h"
 #include "db.h"
 #include "webserver.h"
+#include "screen_webportal.h"
 
 /*
   Author--- LogicishDesigns
@@ -352,6 +353,9 @@ void loop() {
     lv_timer_handler();
     idle_timer_check();
     session_timer_check();
+    // The AP only belongs on the Web Portal screen. Its Back turns it off, but any other
+    // exit (auto-logout especially) used to leave the radio -- and the portal -- running.
+    if (webserver_ap_running() && !screen_webportal_is_active()) webserver_stop_ap();
 
     if (scanner.available()) {
         String code = scanner.readStringUntil('\n');

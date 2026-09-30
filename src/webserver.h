@@ -36,14 +36,8 @@ const char *webserver_ap_password();
 // re-reads it live), no reboot needed.
 bool webserver_set_ap_password(const char *password);
 
-// Admin web-portal login password -- single shared plaintext value for every admin
-// (2026-09-14, replacing a per-admin salted-SHA-256 scheme; see users.h). Same
-// config-backed/editable-on-device pattern as the AP password above, just gating
-// /login instead of the WiFi radio -- screen_admin_password.cpp is its editor
-// (Settings -> Security), same wheel widget as screen_wifi_password.cpp.
-const char *webserver_admin_password();
 
-// Saves a new admin password to config -- returns false (nothing written) if empty.
-// No WPA2-style minimum here; this only gates the web portal's edit actions, not the
-// WiFi radio itself, and "no need for real security" is the whole point of this design.
-bool webserver_set_admin_password(const char *password);
+// True while the AP radio is up (between webserver_start_ap() and webserver_stop_ap()).
+// main.cpp's loop() uses this to shut the radio off whenever the Web Portal screen isn't
+// the one showing, whatever made it leave (2026-09-29 -- auto-logout used to strand it on).
+bool webserver_ap_running();

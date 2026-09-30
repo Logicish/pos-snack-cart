@@ -13,3 +13,6 @@
 // webserver_stop_ap() fires on Back — so the cart isn't broadcasting a WiFi network the
 // rest of the time. Back returns to the main Admin Menu.
 void screen_webportal_push();
+
+// True if the Web Portal screen is the one currently on screen.
+bool screen_webportal_is_active();

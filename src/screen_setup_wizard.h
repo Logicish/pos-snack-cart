@@ -20,8 +20,7 @@
 // happen.
 //
 // Reuses screen_enroll.cpp's badge-scan -> name-wheel -> confirm -> re-scan-confirm flow
-// as its own self-contained copy (same convention as screen_admin_password.cpp mirroring
-// screen_wifi_password.cpp) rather than parameterizing the shared original, since this one
+// as its own self-contained copy rather than parameterizing the shared original, since this one
 // always forces admin=true and always loops back into itself instead of
 // screen_add_user_push(). Loops after each successful add ("scan another, or Back to
 // finish") -- Back is intentionally inert until at least one admin exists, so there's no

@@ -1,7 +1,6 @@
 #include "screen_security_menu.h"
 #include "screen_settings.h"
 #include "screen_wifi_password.h"
-#include "screen_admin_password.h"
 #include "header.h"
 #include "theme.h"
 #include "buttons.h"
@@ -16,19 +15,19 @@
   Function- Implements the Security submenu declared in screen_security_menu.h.
 */
 
-#define MENU_COUNT 3
+#define MENU_COUNT 2
 #define FOOTER_H   52
 
 static lv_obj_t *_scr;
 static lv_obj_t *_rows[MENU_COUNT];
-static lv_obj_t *_row_lbls[MENU_COUNT];  // row 2 (auto-logout) is dynamic; rows 0-1 are static
+static lv_obj_t *_row_lbls[MENU_COUNT];  // row 1 (auto-logout) is dynamic; row 0 is static
 static int        _cursor;
 static int        _prev_cursor = -1;
 
 static const char *MENU_LABELS[MENU_COUNT] = {
     "1. WiFi Password",
-    "2. Admin Password",
-    "3. Auto Logout: - min",  // overwritten immediately by update_logout_row_label()
+    "2. Auto Logout: - min",  // overwritten immediately by update_logout_row_label()
+    // "Admin Password" removed 2026-09-29 along with the web login it set.
 };
 
 // Highlights the currently-selected row.
@@ -61,11 +60,11 @@ static void cb_back() {
 // Redraws the auto-logout row's label with the current timeout.
 static void update_logout_row_label() {
     char buf[32];
-    snprintf(buf, sizeof(buf), "3. Auto Logout: %d min", session_timer_get_minutes());
-    lv_label_set_text(_row_lbls[2], buf);
+    snprintf(buf, sizeof(buf), "2. Auto Logout: %d min", session_timer_get_minutes());
+    lv_label_set_text(_row_lbls[1], buf);
 }
 
-// Enter on row 3: advances the auto-logout timeout by one minute, wrapping 10 -> 1.
+// Enter on row 2: advances the auto-logout timeout by one minute, wrapping 10 -> 1.
 static void act_cycle_logout_timeout() {
     session_timer_set_minutes(session_timer_get_minutes() + 1);  // wraps 10 -> 1
     update_logout_row_label();
@@ -75,8 +74,7 @@ static void act_cycle_logout_timeout() {
 static void cb_enter() {
     switch (_cursor) {
         case 0: screen_wifi_password_push();   break;
-        case 1: screen_admin_password_push();  break;
-        case 2: act_cycle_logout_timeout();    break;
+        case 1: act_cycle_logout_timeout();    break;
     }
 }
 

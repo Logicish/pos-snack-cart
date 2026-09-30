@@ -104,3 +104,8 @@ void screen_webportal_push() {
 
     lv_scr_load(_scr);
 }
+
+// True if this screen is the one currently on screen.
+bool screen_webportal_is_active() {
+    return _scr && lv_scr_act() == _scr;
+}

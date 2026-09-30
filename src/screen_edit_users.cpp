@@ -278,8 +278,17 @@ static void cb_detail_back() {
     build_list_ui();
 }
 
+// True if the detail view is showing the admin who is logged in right now.
+static bool viewing_self() {
+    return _detail_user_id == users_get_current_admin();
+}
+
 // Enter acts on the selected row (opens the name wheel, or toggles Admin/Locked in place).
+// 2026-09-29 (owner's rule): the logged-in admin can't change their own account. They
+// passed Admin Login, so they're an active admin, and since nobody else is editing while
+// they're logged in, the cart can never be left without an active admin to log in with.
 static void cb_detail_enter() {
+    if (viewing_self()) return;
     const User *u = users_get_by_id(_detail_user_id);
     if (!u) return;
 
@@ -326,6 +335,16 @@ static void build_detail_ui() {
     snprintf(balance_buf, sizeof(balance_buf), "Balance: $%d.%02d", cents / 100, cents % 100);
     lv_label_set_text(_detail_balance_lbl, balance_buf);
 
+    bool self = viewing_self();
+    if (self) {
+        lv_obj_t *note = lv_label_create(_content);
+        lv_label_set_long_mode(note, LV_LABEL_LONG_WRAP);
+        lv_label_set_text(note, "This is you. Your own account can't be changed here.");
+        lv_obj_set_width(note, LV_PCT(100));
+        lv_obj_set_style_text_color(note, lv_color_hex(C_ORANGE), LV_PART_MAIN);
+        lv_obj_set_style_text_font(note, &lv_font_montserrat_16, LV_PART_MAIN);
+    }
+
     lv_obj_t *list = lv_obj_create(_content);
     lv_obj_set_size(list, LV_PCT(100), LV_SIZE_CONTENT);
     lv_obj_set_style_bg_opa(list, LV_OPA_TRANSP, LV_PART_MAIN);
@@ -347,7 +366,7 @@ static void build_detail_ui() {
         _detail_rows[i] = row;
 
         lv_obj_t *lbl = lv_label_create(row);
-        lv_obj_set_style_text_color(lbl, lv_color_hex(C_TEXT), LV_PART_MAIN);
+        lv_obj_set_style_text_color(lbl, lv_color_hex(self ? C_DIM : C_TEXT), LV_PART_MAIN);
         lv_obj_set_style_text_font(lbl, &lv_font_montserrat_20, LV_PART_MAIN);
         _detail_row_lbls[i] = lbl;
     }

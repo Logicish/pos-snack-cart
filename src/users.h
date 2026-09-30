@@ -55,12 +55,9 @@ int users_get_all(User *out, int max);
 // Admin Login again (a blank/fresh SD card, or an existing DB that's lost every admin row).
 bool users_has_admin();
 
-// Admin web-portal login (2026-08-25) used to be per-admin (salted SHA-256, a shared
-// default forced a change on first login). Simplified 2026-09-14 to a single shared
-// plaintext password for the whole device -- see webserver.h's webserver_admin_password()/
-// webserver_set_admin_password() -- since this device's threat model never justified the
-// complexity (AP off most of the time, local range only). Nothing per-user to track here
-// anymore.
+// Admin web-portal login: per-admin hashed passwords (2026-08-25), then one shared
+// plaintext password (2026-09-14), then removed entirely (2026-09-29, owner's call). The
+// portal is gated by the cart's Admin Login plus the WiFi password.
 
 // Tracks which admin most recently scanned in on-device this boot, so the web login can
 // auto-populate identity instead of asking for a username (see snack_cart_pos.md's

@@ -228,8 +228,19 @@ bool items_delete(int item_id) {
     if (!db_handle()) return false;
 
     sqlite3_stmt *stmt;
-    // UPC links are just barcode metadata, not historical data -- safe to clear
-    // unconditionally before touching the item row itself.
+    // Refuse up front if the item has sale history -- checked BEFORE clearing its UPCs.
+    // Until 2026-09-29 the UPCs were cleared first and the item delete then failed on the
+    // foreign key, so a refused delete still silently stripped the item's barcodes.
+    int history = 0;
+    if (sqlite3_prepare_v2(db_handle(), "SELECT COUNT(*) FROM checkout_items WHERE item_id=?;", -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_int(stmt, 1, item_id);
+        if (sqlite3_step(stmt) == SQLITE_ROW) history = sqlite3_column_int(stmt, 0);
+        sqlite3_finalize(stmt);
+    }
+    if (history > 0) return false;
+
+    // UPC links are just barcode metadata, not historical data -- safe to clear before
+    // touching the item row itself.
     if (sqlite3_prepare_v2(db_handle(), "DELETE FROM item_upcs WHERE item_id=?;", -1, &stmt, nullptr) == SQLITE_OK) {
         sqlite3_bind_int(stmt, 1, item_id);
         sqlite3_step(stmt);
