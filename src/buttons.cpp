@@ -133,9 +133,22 @@ static ButtonState _btn[BTN_COUNT] = {
 
 static ButtonHandlers _handlers;
 
-// Sets all 6 pins to input with internal pull-up (active-low buttons).
+// Set by the pin interrupt on every falling edge (press), consumed by buttons_poll() --
+// see ButtonHandlers::fastTaps.
+static volatile bool _latched[BTN_COUNT];
+
+static void IRAM_ATTR on_press_edge(void *arg) {
+    _latched[(int)(intptr_t)arg] = true;
+}
+
+// Sets all 6 pins to input with internal pull-up (active-low buttons), plus the
+// press-latch interrupt fastTaps screens use.
 void buttons_init() {
-    for (auto &b : _btn) pinMode(b.pin, INPUT_PULLUP);
+    for (int i = 0; i < BTN_COUNT; i++) {
+        pinMode(_btn[i].pin, INPUT_PULLUP);
+        attachInterruptArg(digitalPinToInterrupt(_btn[i].pin), on_press_edge,
+                           (void *)(intptr_t)i, FALLING);
+    }
 }
 
 // Swaps in a new set of button callbacks for whatever screen is now active, and resets
@@ -192,6 +205,25 @@ void buttons_poll() {
     for (int i = 0; i < BTN_COUNT; i++) {
         ButtonState &b = _btn[i];
         bool raw = (digitalRead(b.pin) == LOW);  // active-low, internal pullup
+
+        // fastTaps: a latched press while the button is committed-released dispatches now,
+        // even if the finger is already off it. The release then commits through the normal
+        // debounce below. Latches while already pressed (release bounce) are just dropped.
+        bool latched = _latched[i];
+        _latched[i] = false;
+        if (latched && _handlers.fastTaps && !b.pressed) {
+            b.pressed      = true;
+            b.stableRaw    = raw;
+            b.lastChangeMs = now;
+            b.repeating    = false;
+            idle_timer_reset();
+            session_timer_reset();
+            ButtonCb cb = handler_for(i);
+            if (cb) cb();
+            now = millis();
+            b.pressedAtMs = now;
+            continue;
+        }
 
         if (raw != b.stableRaw) {
             b.stableRaw    = raw;

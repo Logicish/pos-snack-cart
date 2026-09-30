@@ -3,10 +3,9 @@
 /*
   Author--- LogicishDesigns
   Date----- September 2026
-  Function- "Laggy Fish" -- Extras screen's first entry. Placeholder only for now; the
-            real design (a deliberately-laggy D-pad-controlled fish minigame reusing the
-            screensaver's fish sprites) is written up in full in snack_cart_pos.md's
-            "Novelty mini-games" planning notes but not built yet.
+  Function- "Laggy Fish" -- an Extras minigame. Rebuilt 2026-09-30 as a Flappy Bird
+            clone: any button flaps, swim the fish through scrolling pipe gaps, 3 lives,
+            per-user best score saved via game_scores.h.
 */
 
 void screen_laggy_fish_push();

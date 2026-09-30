@@ -23,6 +23,11 @@ struct ButtonHandlers {
     // so hopping between two screens that both want it off (or both want it on) costs
     // nothing extra. See buttons.cpp for the toggle + ACK-drain mechanics.
     bool wantsScanner = false;
+    // 2026-09-30 -- games only (Laggy Fish). A pin interrupt latches every press, so a
+    // quick tap that starts and ends between two buttons_poll() calls (easy while a frame
+    // is rendering) still dispatches. Skips the 20ms debounce for that press; off by
+    // default so every other screen keeps the proven input path unchanged.
+    bool fastTaps = false;
 };
 
 void buttons_init();  // call once in setup() -- sets up the 6 GPIO pins

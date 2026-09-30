@@ -1,5 +1,7 @@
 #include "screen_laggy_fish.h"
 #include "screens.h"
+#include "screen_extras.h"
+#include "game_scores.h"
 #include "header.h"
 #include "theme.h"
 #include "buttons.h"
@@ -11,41 +13,37 @@
   Author--- LogicishDesigns
   Date----- September 2026
   Function- Implements the Laggy Fish minigame declared in screen_laggy_fish.h.
-  Notes---- A splash/rules screen, horizontal-only D-pad fish movement (fixed vertical
-            position, no up/down -- kept deliberately simple), drifting point/hazard
-            glyphs rising from the bottom, and win/game-over end screens (WIN_SCORE
-            points reached, or lives run out). Movement is still driven straight off
-            button press/repeat events rather than its own timer -- only the drifting
-            items need a timer, since they move on their own. See project memory,
-            project-laggy-fish-design-notes, for why the point/hazard glyphs are plain
-            fixed-width characters rather than art assets.
+  Notes---- REBUILT 2026-09-30 as a Flappy Bird clone (was a horizontal dodge/catch game
+            -- see project memory, project-laggy-fish-design-notes, for the original).
+            Any button but Back flaps; the fish falls under gravity and has to swim
+            through the gaps in pipes scrolling in from the right. 3 lives: a hit costs
+            one, blinks the fish invulnerable for a moment, and play carries on. Score is
+            pipes passed, saved as a per-user best via game_scores.h on game over.
+            Timing (2026-09-30, after the first hardware play): physics steps on a fixed
+            SIM_MS clock against real elapsed time, and the screen only redraws every
+            FRAME_MS. First version stepped once per lv_timer tick, so game speed wobbled
+            with however long each frame took to render (more pipe on screen = slower).
+            Now the choppiness is a deliberate, steady frame cap -- the fake lag -- while
+            the game itself runs at a constant speed underneath it.
 */
 
-LV_IMG_DECLARE(fish_left);
-LV_IMG_DECLARE(fish_right);
+LV_IMG_DECLARE(fish_flap);    // 48x32 downscale, in-game
+LV_IMG_DECLARE(fish_right);   // full-size, win screen only
 
 // ── layout ───────────────────────────────────────────────────────────────────
-#define FISH_W       120
-#define FISH_H        80
+#define PANEL_H      (SCREEN_H - HDR_H)
 #define SCORE_H       30   // strip below the main header for the Lives/Score readout
 #define FOOTER_H      52
-#define MOVE_STEP     16   // px per press/repeat tick -- chunky on purpose
+#define FIELD_Y      SCORE_H
+#define FIELD_H      (PANEL_H - SCORE_H - FOOTER_H)
 
-#define PLAY_TOP     (HDR_H + SCORE_H)
-#define PLAY_BOTTOM  (SCREEN_H - FOOTER_H)
-#define X_MIN         0
-#define X_MAX        (SCREEN_W - FISH_W)
+#define FISH_W        48
+#define FISH_H        32
+#define FISH_X        40   // fixed column -- the pipes move, the fish doesn't
+#define FISH_HIT_INSET 6   // shrink the hitbox a bit -- fins brushing a pipe shouldn't count
 
-// Fish sits fixed ~3/4 of the way toward the top of the play field and never moves
-// vertically -- items drift UP past it (matches the screensaver's rising bubbles), so a
-// high, fixed perch gives the player a consistent interception line to aim for.
-#define FISH_Y_FRAC   0.25f
-
-// Sparkle ring around the fish on the win screen -- plain "*" glyphs at fixed offsets
-// from panel center, same cheap-fixed-width-glyph reasoning as the in-game item glyphs
-// (see project memory, project-laggy-fish-design-notes) rather than a new art asset.
-// Y offsets nudged down ~40px (about 2 lines) 2026-09-15 after a first look on hardware
-// showed the ring sitting too high relative to the fish.
+// Sparkle ring around the fish on the new-best screen -- plain "*" glyphs at fixed
+// offsets from panel center rather than a new art asset.
 #define WIN_SPARKLE_COUNT 6
 static const lv_point_t WIN_SPARKLE_OFFSETS[WIN_SPARKLE_COUNT] = {
     { -80, -20 }, { 80, -20 },
@@ -53,53 +51,62 @@ static const lv_point_t WIN_SPARKLE_OFFSETS[WIN_SPARKLE_COUNT] = {
     { -70,  75 }, { 70,  75 },
 };
 
-// ── items (drifting point/hazard glyphs) ────────────────────────────────────
-#define MAX_ITEMS         6
-#define ITEM_TICK_MS     250   // deliberately slow/chunky, matches the "lag is the game" feel
-#define ITEM_SPAWN_PCT    40   // % chance per tick of spawning a new item, if a slot is free
-#define ITEM_W             20  // rough glyph bounding box, used for spawn range + hit test
-#define ITEM_H             28
+// ── timing ───────────────────────────────────────────────────────────────────
+#define SIM_MS        40   // one physics step -- every per-tick constant below is per step
+#define FRAME_MS      80   // redraw cap (~12.5fps) -- the deliberate lag; 40 = as smooth as
+                           // the sim gets, if the panel can keep up
+#define MAX_CATCHUP    4   // steps per frame at most, so one long stall can't fast-forward
 
-// Difficulty ramp: items start slow and speed up the longer a run goes, rather than a
-// fixed rise speed for the whole game. Step size only (not the tick interval) so the
-// timer callback rate never changes -- one less moving part.
-#define ITEM_STEP_START    10   // px risen per tick, start of a run
-#define ITEM_STEP_MAX      30   // px risen per tick, ramp ceiling
-#define ITEM_STEP_RAMP_MS 8000  // +ITEM_STEP_INC every this many ms of play
-#define ITEM_STEP_INC       3
+// Serial-log average/max frame interval every ~5s while playing, for tuning FRAME_MS.
+#define LAGGY_FISH_FPS_LOG 0
 
-// Minimum horizontal separation enforced between any two currently-active items
-// (regardless of their height) so there's always a fish-width-ish gap to dodge into --
-// without this, two items spawned close together in x can arrive at the fish's row at
-// the same time with no room to escape either side, per real hardware testing.
-#define ITEM_MIN_GAP_X    FISH_W
-#define ITEM_SPAWN_ATTEMPTS 6
+// ── physics (fixed-point, 1/16 px, per step) ─────────────────────────────────
+#define FP            16
+#define GRAVITY       10   // 0.625 px/tick^2
+#define FLAP_VY     (-128) // -8 px/tick -- about a 50px hop
+#define MAX_FALL_VY   160  // 10 px/tick terminal velocity
 
-enum ItemType { ITEM_O, ITEM_DOLLAR, ITEM_X, ITEM_STAR, ITEM_TYPE_COUNT };
+// ── pipes ────────────────────────────────────────────────────────────────────
+#define MAX_PIPES          3
+#define PIPE_W            50
+#define PIPE_SPACING     180   // left edge to left edge
+#define PIPE_MARGIN       30   // gap never closer than this to the ceiling/floor
+#define PIPE_MAX_SHIFT   120   // max gap-center move between neighbors, keeps it reachable
 
-struct FishItem {
-    lv_obj_t *label;
-    int16_t   x, y;
-    ItemType  type;
-    bool      active;
+// Difficulty ramp, driven by pipes passed rather than time.
+#define GAP_START        140
+#define GAP_MIN          105
+#define GAP_SHRINK         3   // px narrower per pipe passed, down to GAP_MIN
+#define SPEED_START        3   // px/tick
+#define SPEED_MAX          6
+#define SPEED_EVERY        8   // +1 speed every this many pipes
+
+#define LIVES_START        3
+#define INVULN_TICKS      40   // ~1.6s of blinking after a hit
+
+struct Pipe {
+    lv_obj_t *top;
+    lv_obj_t *bottom;
+    int16_t   x;
+    int16_t   gap_top;
+    int16_t   gap_bottom;
+    bool      passed;
 };
-
-static const char *ITEM_GLYPH[ITEM_TYPE_COUNT] = { "O", "$", "X", "*" };
-// Points for O/$/, life cost (as a negative) for X/*  -- looked up by type below.
-static const int ITEM_POINTS[ITEM_TYPE_COUNT] = { 1, 5, 0, 0 };
-static bool item_is_hazard(ItemType t) { return t == ITEM_X || t == ITEM_STAR; }
 
 enum GameState { ST_SPLASH, ST_PLAYING, ST_GAMEOVER, ST_WIN };
 
 static lv_obj_t *_scr;
 
 static lv_obj_t *_splash_panel;
+static lv_obj_t *_splash_scores_label;
 
 static lv_obj_t *_play_panel;
+static lv_obj_t *_field;
 static lv_obj_t *_fish_img;
+static lv_obj_t *_ready_label;
 static lv_obj_t *_lives_label;
 static lv_obj_t *_score_label;
-static FishItem   _items[MAX_ITEMS];
+static Pipe       _pipes[MAX_PIPES];
 
 static lv_obj_t *_gameover_panel;
 static lv_obj_t *_gameover_label;
@@ -107,100 +114,32 @@ static lv_obj_t *_gameover_label;
 static lv_obj_t *_win_panel;
 static lv_obj_t *_win_label;
 static lv_obj_t *_win_score_label;
-static lv_obj_t *_win_fish_img;
-static lv_obj_t *_win_sparkles[WIN_SPARKLE_COUNT];
 
 static lv_timer_t *_timer;
 static GameState    _state;
 
-static int16_t _fish_x;
-static int16_t _fish_y;   // fixed once computed; kept as a var only to avoid recomputing
-static bool    _facing_right;
+static int32_t _fish_y_fp;   // fish top edge within the field, 1/16 px
+static int32_t _vy_fp;
+static bool    _ready;       // waiting for the first flap -- nothing moves yet
+static int     _invuln;      // ticks of post-hit invulnerability left
 static int     _score;
 static int     _lives;
-static uint32_t _game_start_ms;
-
-#define LIVES_START 3
-#define WIN_SCORE   100   // first cut, easy to retune once actually played to it
+static int     _best_before;       // this user's best going into the run
+static int     _top_before;        // cart-wide top going into the run, -1 if none
+static uint32_t _last_ms;          // real time the sim was last advanced to
+static uint32_t _acc_ms;           // real time not yet spent on sim steps
 
 static void enter_state(GameState s);
 
-// ── fish ─────────────────────────────────────────────────────────────────────
-static void redraw_fish() {
-    lv_img_set_src(_fish_img, _facing_right ? &fish_right : &fish_left);
-    lv_obj_set_pos(_fish_img, _fish_x, _fish_y);
+// ── helpers ──────────────────────────────────────────────────────────────────
+static int current_gap() {
+    int g = GAP_START - _score * GAP_SHRINK;
+    return g < GAP_MIN ? GAP_MIN : g;
 }
 
-static void cb_move_left() {
-    _facing_right = false;
-    _fish_x -= MOVE_STEP;
-    if (_fish_x < X_MIN) _fish_x = X_MIN;
-    redraw_fish();
-}
-
-static void cb_move_right() {
-    _facing_right = true;
-    _fish_x += MOVE_STEP;
-    if (_fish_x > X_MAX) _fish_x = X_MAX;
-    redraw_fish();
-}
-
-// ── items ────────────────────────────────────────────────────────────────────
-static void item_hide(FishItem &it) {
-    lv_obj_add_flag(it.label, LV_OBJ_FLAG_HIDDEN);
-    it.active = false;
-}
-
-// True if candidate_x is at least ITEM_MIN_GAP_X away from every currently-active item's
-// x, regardless of that item's height -- guarantees a dodge-able gap opens up on one side
-// or the other by the time this item reaches the fish's row.
-static bool x_clear_of_active_items(int16_t candidate_x) {
-    for (int i = 0; i < MAX_ITEMS; i++) {
-        if (!_items[i].active) continue;
-        if (abs((int)candidate_x - (int)_items[i].x) < ITEM_MIN_GAP_X) return false;
-    }
-    return true;
-}
-
-static void item_spawn() {
-    int slot = -1;
-    for (int i = 0; i < MAX_ITEMS; i++) {
-        if (!_items[i].active) { slot = i; break; }
-    }
-    if (slot < 0) return;  // pool full? skip spawning this tick, no big deal
-
-    int16_t x = -1;
-    for (int attempt = 0; attempt < ITEM_SPAWN_ATTEMPTS; attempt++) {
-        int16_t candidate = random(0, SCREEN_W - ITEM_W);
-        if (x_clear_of_active_items(candidate)) { x = candidate; break; }
-    }
-    if (x < 0) return;  // couldn't find a clear enough spot this tick -- try again next tick
-
-    FishItem &it = _items[slot];
-    it.type   = (ItemType)random(ITEM_TYPE_COUNT);
-    it.x      = x;
-    it.y      = PLAY_BOTTOM - ITEM_H;
-    it.active = true;
-
-    lv_label_set_text(it.label, ITEM_GLYPH[it.type]);
-    // Both hazards render red now (was X=red/*=orange) -- one glance should be enough to
-    // tell good from bad, per the owner's request, rather than needing to recognize two
-    // different "danger" colors.
-    lv_obj_set_style_text_color(it.label,
-        lv_color_hex(item_is_hazard(it.type) ? C_RED :
-                     it.type == ITEM_O ? C_YELLOW : C_GREEN),
-        LV_PART_MAIN);
-    lv_obj_set_pos(it.label, it.x, it.y);
-    lv_obj_clear_flag(it.label, LV_OBJ_FLAG_HIDDEN);
-}
-
-// Current per-tick rise speed for this run -- ramps from ITEM_STEP_START up to
-// ITEM_STEP_MAX the longer the run goes, rather than a single fixed-forever speed.
-static int16_t current_item_step() {
-    uint32_t elapsed = millis() - _game_start_ms;
-    int32_t  step = ITEM_STEP_START + (elapsed / ITEM_STEP_RAMP_MS) * ITEM_STEP_INC;
-    if (step > ITEM_STEP_MAX) step = ITEM_STEP_MAX;
-    return (int16_t)step;
+static int current_speed() {
+    int s = SPEED_START + _score / SPEED_EVERY;
+    return s > SPEED_MAX ? SPEED_MAX : s;
 }
 
 static void refresh_score_labels() {
@@ -211,54 +150,170 @@ static void refresh_score_labels() {
     lv_label_set_text(_score_label, buf);
 }
 
-// One item vs. the fish's current bounding box.
-static bool item_hits_fish(const FishItem &it) {
-    return it.x + ITEM_W >= _fish_x && it.x <= _fish_x + FISH_W &&
-           it.y + ITEM_H >= _fish_y && it.y <= _fish_y + FISH_H;
+// "Your best / Top" lines shared by the splash and game-over screens.
+static void format_scores(char *out, size_t len) {
+    int uid  = screen_extras_current_user_id();
+    int best = game_scores_get_best(uid, GAME_KEY_LAGGY_FISH);
+    int top;
+    char name[40];
+    if (game_scores_get_top(GAME_KEY_LAGGY_FISH, &top, name, sizeof(name)))
+        snprintf(out, len, "Your best: %d\nTop: %s  %d", best, name, top);
+    else
+        snprintf(out, len, "Your best: %d\nNo top score yet!", best);
 }
 
-// Advances every active item one tick: rises, checks for a catch, or clears off the top.
-static void items_tick() {
-    int16_t step = current_item_step();
+// ── fish ─────────────────────────────────────────────────────────────────────
+static void redraw_fish() {
+    lv_obj_set_pos(_fish_img, FISH_X, _fish_y_fp / FP);
+}
 
-    for (int i = 0; i < MAX_ITEMS; i++) {
-        FishItem &it = _items[i];
-        if (!it.active) continue;
+static void cb_flap() {
+    if (_ready) {
+        _ready = false;
+        lv_obj_add_flag(_ready_label, LV_OBJ_FLAG_HIDDEN);
+        _last_ms = millis();  // the clock starts now, not when the screen opened
+        _acc_ms  = 0;
+    }
+    _vy_fp = FLAP_VY;
+}
 
-        it.y -= step;
+// ── pipes ────────────────────────────────────────────────────────────────────
+// Picks a new gap for pipe `p`, within PIPE_MAX_SHIFT of the previous pipe's gap center.
+static void pipe_new_gap(Pipe &p, int prev_center) {
+    int gap  = current_gap();
+    int lo   = PIPE_MARGIN + gap / 2;
+    int hi   = FIELD_H - PIPE_MARGIN - gap / 2;
+    int from = max(lo, prev_center - PIPE_MAX_SHIFT);
+    int to   = min(hi, prev_center + PIPE_MAX_SHIFT);
+    int center = random(from, to + 1);
+    p.gap_top    = center - gap / 2;
+    p.gap_bottom = p.gap_top + gap;
+    p.passed     = false;
 
-        if (item_hits_fish(it)) {
-            if (item_is_hazard(it.type)) {
-                _lives--;
-            } else {
-                _score += ITEM_POINTS[it.type];
-            }
-            refresh_score_labels();
-            item_hide(it);
-            if (_lives <= 0) {
-                enter_state(ST_GAMEOVER);
-                return;  // panel just got torn down/hidden -- stop touching this tick's items
-            }
-            if (_score >= WIN_SCORE) {
-                enter_state(ST_WIN);
-                return;  // same reasoning as the game-over return above
-            }
-            continue;
-        }
+    lv_obj_set_size(p.top, PIPE_W, p.gap_top);
+    lv_obj_set_size(p.bottom, PIPE_W, FIELD_H - p.gap_bottom);
+}
 
-        if (it.y + ITEM_H < PLAY_TOP) {
-            item_hide(it);  // drifted past the fish without being caught -- no penalty
-            continue;
-        }
+static void pipe_place(Pipe &p) {
+    lv_obj_set_pos(p.top, p.x, 0);
+    lv_obj_set_pos(p.bottom, p.x, p.gap_bottom);
+}
 
-        lv_obj_set_pos(it.label, it.x, it.y);
+static int pipe_center(const Pipe &p) { return (p.gap_top + p.gap_bottom) / 2; }
+
+// True if the fish's (inset) hitbox overlaps pipe `p`'s solid parts.
+static bool pipe_hits_fish(const Pipe &p, int fish_y) {
+    int fl = FISH_X + FISH_HIT_INSET, fr = FISH_X + FISH_W - FISH_HIT_INSET;
+    int ft = fish_y + FISH_HIT_INSET, fb = fish_y + FISH_H - FISH_HIT_INSET;
+    if (fr < p.x || fl > p.x + PIPE_W) return false;
+    return ft < p.gap_top || fb > p.gap_bottom;
+}
+
+// ── game tick ────────────────────────────────────────────────────────────────
+// Costs a life and starts the invulnerability blink, or ends the run on the last one.
+// Returns true if the run ended (caller must stop touching this tick's state).
+static bool take_hit() {
+    _lives--;
+    refresh_score_labels();
+    if (_lives <= 0) {
+        enter_state(ST_GAMEOVER);
+        return true;
+    }
+    _invuln = INVULN_TICKS;
+    _vy_fp  = FLAP_VY;  // a little hop so a floor hit doesn't immediately re-hit
+    return false;
+}
+
+// One fixed physics step: moves everything, scores, and checks hits. Doesn't touch any
+// LVGL positions -- render_frame() does that once per frame. Returns true if the run
+// ended (caller must stop stepping).
+static bool sim_step() {
+    // Fish
+    _vy_fp += GRAVITY;
+    if (_vy_fp > MAX_FALL_VY) _vy_fp = MAX_FALL_VY;
+    _fish_y_fp += _vy_fp;
+    if (_fish_y_fp < 0) { _fish_y_fp = 0; _vy_fp = 0; }  // ceiling just stops you
+    int fish_y = _fish_y_fp / FP;
+
+    bool floor_hit = fish_y + FISH_H >= FIELD_H;
+    if (floor_hit) {
+        _fish_y_fp = (FIELD_H - FISH_H) * FP;
+        fish_y = FIELD_H - FISH_H;
     }
 
-    if (random(100) < ITEM_SPAWN_PCT) item_spawn();
+    // Pipes
+    int speed = current_speed();
+    bool pipe_hit = false;
+    int rightmost = 0;
+    for (int i = 0; i < MAX_PIPES; i++)
+        if (_pipes[i].x > _pipes[rightmost].x) rightmost = i;
+
+    for (int i = 0; i < MAX_PIPES; i++) {
+        Pipe &p = _pipes[i];
+        p.x -= speed;
+
+        if (p.x + PIPE_W < 0) {
+            // Recycle to the back of the line
+            p.x = _pipes[rightmost].x + PIPE_SPACING;
+            pipe_new_gap(p, pipe_center(_pipes[rightmost]));
+            rightmost = i;
+        }
+
+        if (!p.passed && p.x + PIPE_W < FISH_X) {
+            p.passed = true;
+            _score++;
+            refresh_score_labels();
+        }
+
+        if (_invuln == 0 && pipe_hits_fish(p, fish_y)) {
+            pipe_hit = true;
+            p.passed = true;  // no point for a pipe you crashed into
+        }
+    }
+
+    if (_invuln > 0) {
+        _invuln--;
+    } else if (floor_hit || pipe_hit) {
+        if (take_hit()) return true;
+    }
+    return false;
 }
 
+// Pushes the current sim state to the screen -- the only place positions change.
+static void render_frame() {
+    for (int i = 0; i < MAX_PIPES; i++) pipe_place(_pipes[i]);
+    // Blink every 4 steps while invulnerable
+    if (_invuln > 0 && (_invuln / 4) % 2) lv_obj_add_flag(_fish_img, LV_OBJ_FLAG_HIDDEN);
+    else                                  lv_obj_clear_flag(_fish_img, LV_OBJ_FLAG_HIDDEN);
+    redraw_fish();
+}
+
+// Fires every FRAME_MS: runs however many SIM_MS steps real time says are due (a late
+// frame catches up instead of slowing the game), then draws once.
 static void tick_cb(lv_timer_t *) {
-    items_tick();
+    if (_ready) return;
+
+    uint32_t now = millis();
+    _acc_ms += now - _last_ms;
+    _last_ms = now;
+    if (_acc_ms > MAX_CATCHUP * SIM_MS) _acc_ms = MAX_CATCHUP * SIM_MS;
+
+    while (_acc_ms >= SIM_MS) {
+        _acc_ms -= SIM_MS;
+        if (sim_step()) return;  // game over -- panel is already hidden
+    }
+    render_frame();
+
+#if LAGGY_FISH_FPS_LOG
+    static uint32_t prev, sum, worst, n;
+    uint32_t dt = now - prev;
+    prev = now;
+    if (dt < 1000) { sum += dt; if (dt > worst) worst = dt; n++; }
+    if (n >= 60) {
+        Serial.printf("[FISH] frame avg %lums, max %lums\n", (unsigned long)(sum / n), (unsigned long)worst);
+        sum = worst = n = 0;
+    }
+#endif
 }
 
 // ── state transitions ────────────────────────────────────────────────────────
@@ -267,39 +322,51 @@ static void stop_timer() {
 }
 
 static void start_game() {
-    _score = 0;
-    _lives = LIVES_START;
-    _game_start_ms = millis();
-    _facing_right = true;
-    _fish_x = (SCREEN_W - FISH_W) / 2;
-    _fish_y = PLAY_TOP + (int)((PLAY_BOTTOM - PLAY_TOP - FISH_H) * FISH_Y_FRAC);
-    if (_fish_y < PLAY_TOP) _fish_y = PLAY_TOP;
+    _score  = 0;
+    _lives  = LIVES_START;
+    _invuln = 0;
+    _vy_fp  = 0;
+    _ready  = true;
+    _fish_y_fp = ((FIELD_H - FISH_H) / 2) * FP;
+    lv_obj_clear_flag(_fish_img, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(_ready_label, LV_OBJ_FLAG_HIDDEN);
     redraw_fish();
     refresh_score_labels();
-    for (int i = 0; i < MAX_ITEMS; i++) item_hide(_items[i]);
+
+    int prev_center = FIELD_H / 2;
+    for (int i = 0; i < MAX_PIPES; i++) {
+        _pipes[i].x = SCREEN_W + 60 + i * PIPE_SPACING;  // first pipe arrives after a beat
+        pipe_new_gap(_pipes[i], prev_center);
+        pipe_place(_pipes[i]);
+        prev_center = pipe_center(_pipes[i]);
+    }
+
+    int uid = screen_extras_current_user_id();
+    _best_before = game_scores_get_best(uid, GAME_KEY_LAGGY_FISH);
+    char name[40];
+    if (!game_scores_get_top(GAME_KEY_LAGGY_FISH, &_top_before, name, sizeof(name)))
+        _top_before = -1;
 
     enter_state(ST_PLAYING);
 
     stop_timer();
-    _timer = lv_timer_create(tick_cb, ITEM_TICK_MS, nullptr);
+    _timer = lv_timer_create(tick_cb, FRAME_MS, nullptr);
 }
 
-// Back from the splash or game-over screens: leaves Laggy Fish entirely.
+// Back from any state: leaves Laggy Fish, back to the already-identified Extras menu.
 static void cb_exit() {
-    stop_timer();
-    screen_extras_return_to_list();  // 2026-09-15 -- was screen_extras_push(), which now
-                                      // forces a fresh badge scan; this just returns to
-                                      // the already-identified menu instead
-}
-
-// Back while actually playing: bail out immediately, same as everywhere else in the app.
-static void cb_abandon() {
     stop_timer();
     screen_extras_return_to_list();
 }
 
-// Any non-Back button on the splash or game-over screens (re)starts the game.
+// Any non-Back button on the splash or end screens (re)starts the game. On the end
+// screens, presses in the first END_LOCKOUT_MS are ignored -- otherwise a flap mashed
+// just as the last life goes restarts instantly and skips past the score.
+#define END_LOCKOUT_MS 800
+static uint32_t _ended_ms;
+
 static void cb_start_or_retry() {
+    if ((_state == ST_GAMEOVER || _state == ST_WIN) && millis() - _ended_ms < END_LOCKOUT_MS) return;
     start_game();
 }
 
@@ -313,25 +380,38 @@ static void enter_state(GameState s) {
 
     ButtonHandlers h;
     switch (s) {
-        case ST_SPLASH:
+        case ST_SPLASH: {
             stop_timer();
+            char buf[80];
+            format_scores(buf, sizeof(buf));
+            lv_label_set_text(_splash_scores_label, buf);
             lv_obj_clear_flag(_splash_panel, LV_OBJ_FLAG_HIDDEN);
             h.up = h.down = h.left = h.right = h.enter = cb_start_or_retry;
             h.back = cb_exit;
             break;
+        }
 
         case ST_PLAYING:
             lv_obj_clear_flag(_play_panel, LV_OBJ_FLAG_HIDDEN);
-            h.left  = cb_move_left;
-            h.right = cb_move_right;
-            h.back  = cb_abandon;
+            h.up = h.down = h.left = h.right = h.enter = cb_flap;
+            h.back = cb_exit;
+            h.fastTaps = true;  // quick flap taps mid-render must not get lost
             break;
 
         case ST_GAMEOVER: {
             stop_timer();
+            _ended_ms = millis();
+            // Save first -- a new personal best gets the sparkle screen instead.
+            int uid = screen_extras_current_user_id();
+            if (game_scores_submit(uid, GAME_KEY_LAGGY_FISH, _score)) {
+                enter_state(ST_WIN);
+                return;
+            }
             lv_obj_clear_flag(_gameover_panel, LV_OBJ_FLAG_HIDDEN);
-            char buf[64];
-            snprintf(buf, sizeof(buf), "GAME OVER\n\nScore: %d\n\nPress any button to play again.", _score);
+            char scores[80];
+            format_scores(scores, sizeof(scores));
+            char buf[140];
+            snprintf(buf, sizeof(buf), "GAME OVER\n\nScore: %d\n\n%s", _score, scores);
             lv_label_set_text(_gameover_label, buf);
             h.up = h.down = h.left = h.right = h.enter = cb_start_or_retry;
             h.back = cb_exit;
@@ -339,10 +419,12 @@ static void enter_state(GameState s) {
         }
 
         case ST_WIN: {
-            stop_timer();
+            // Reached only from ST_GAMEOVER, after a new personal best saved.
             lv_obj_clear_flag(_win_panel, LV_OBJ_FLAG_HIDDEN);
-            char buf[24];
-            snprintf(buf, sizeof(buf), "Score: %d", _score);
+            bool record = _score > _top_before;
+            lv_label_set_text(_win_label, record ? "NEW CART RECORD!" : "NEW PERSONAL BEST!");
+            char buf[48];
+            snprintf(buf, sizeof(buf), "Score: %d\nOld best: %d", _score, _best_before);
             lv_label_set_text(_win_score_label, buf);
             h.up = h.down = h.left = h.right = h.enter = cb_start_or_retry;
             h.back = cb_exit;
@@ -353,45 +435,55 @@ static void enter_state(GameState s) {
 }
 
 // ── build ────────────────────────────────────────────────────────────────────
-static void build_splash_panel() {
-    _splash_panel = lv_obj_create(_scr);
-    lv_obj_set_size(_splash_panel, SCREEN_W, SCREEN_H - HDR_H);
-    lv_obj_align(_splash_panel, LV_ALIGN_BOTTOM_MID, 0, 0);
-    lv_obj_set_style_bg_opa(_splash_panel, LV_OPA_TRANSP, LV_PART_MAIN);
-    lv_obj_set_style_border_width(_splash_panel, 0, LV_PART_MAIN);
-    lv_obj_clear_flag(_splash_panel, LV_OBJ_FLAG_SCROLLABLE);
+// Full-height transparent panel under the header -- each game state gets one.
+static lv_obj_t *make_panel() {
+    lv_obj_t *p = lv_obj_create(_scr);
+    lv_obj_set_size(p, SCREEN_W, PANEL_H);
+    lv_obj_align(p, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_obj_set_style_bg_opa(p, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_border_width(p, 0, LV_PART_MAIN);
+    lv_obj_clear_flag(p, LV_OBJ_FLAG_SCROLLABLE);
+    return p;
+}
 
-    lv_obj_t *lbl = lv_label_create(_splash_panel);
-    lv_label_set_text(lbl,
-        "LAGGY FISH\n\n"
-        "O = 1 point\n"
-        "$ = 5 points\n\n"
-        "X and * cost a life\n\n"
-        "Reach 100 points to win!");
-    // ("Catch what you can, dodge the rest!" flavor line dropped 2026-09-15 to make room
-    // for the win-condition line -- the point/hazard rows above already say the same
-    // thing more concretely.)
+// Centered wrapped label, the text style every panel here uses.
+static lv_obj_t *make_text(lv_obj_t *parent, uint32_t color, const lv_font_t *font) {
+    lv_obj_t *lbl = lv_label_create(parent);
     lv_label_set_long_mode(lbl, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(lbl, 260);
-    lv_obj_set_style_text_color(lbl, lv_color_hex(C_CYAN), LV_PART_MAIN);
-    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_20, LV_PART_MAIN);
+    lv_obj_set_style_text_color(lbl, lv_color_hex(color), LV_PART_MAIN);
+    lv_obj_set_style_text_font(lbl, font, LV_PART_MAIN);
     lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
-    lv_obj_align(lbl, LV_ALIGN_CENTER, 0, -10);
+    return lbl;
+}
 
-    lv_obj_t *legend = ui_legend(_splash_panel);
+static void add_footer(lv_obj_t *panel, const char *action) {
+    lv_obj_t *legend = ui_legend(panel);
     lv_obj_set_width(legend, SCREEN_W - 28);
     lv_obj_align(legend, LV_ALIGN_BOTTOM_MID, 0, -6);
-    ui_legend_row(legend, "", lv_color_hex(C_TEXT), "Any Button = Start", lv_color_hex(C_YELLOW));
+    ui_legend_row(legend, "", lv_color_hex(C_TEXT), action, lv_color_hex(C_YELLOW));
     ui_legend_row(legend, "", lv_color_hex(C_TEXT), "Exit", lv_color_hex(C_RED));
 }
 
+static void build_splash_panel() {
+    _splash_panel = make_panel();
+
+    lv_obj_t *lbl = make_text(_splash_panel, C_CYAN, &lv_font_montserrat_20);
+    lv_label_set_text(lbl,
+        "LAGGY FISH\n\n"
+        "Any button = flap\n"
+        "Swim through the gaps!\n\n"
+        "3 lives");
+    lv_obj_align(lbl, LV_ALIGN_CENTER, 0, -70);
+
+    _splash_scores_label = make_text(_splash_panel, C_YELLOW, &lv_font_montserrat_20);
+    lv_obj_align(_splash_scores_label, LV_ALIGN_CENTER, 0, 70);
+
+    add_footer(_splash_panel, "Any Button = Start");
+}
+
 static void build_play_panel() {
-    _play_panel = lv_obj_create(_scr);
-    lv_obj_set_size(_play_panel, SCREEN_W, SCREEN_H - HDR_H);
-    lv_obj_align(_play_panel, LV_ALIGN_BOTTOM_MID, 0, 0);
-    lv_obj_set_style_bg_opa(_play_panel, LV_OPA_TRANSP, LV_PART_MAIN);
-    lv_obj_set_style_border_width(_play_panel, 0, LV_PART_MAIN);
-    lv_obj_clear_flag(_play_panel, LV_OBJ_FLAG_SCROLLABLE);
+    _play_panel = make_panel();
 
     _lives_label = lv_label_create(_play_panel);
     lv_obj_set_style_text_color(_lives_label, lv_color_hex(C_RED), LV_PART_MAIN);
@@ -403,63 +495,54 @@ static void build_play_panel() {
     lv_obj_set_style_text_font(_score_label, &lv_font_montserrat_20, LV_PART_MAIN);
     lv_obj_align(_score_label, LV_ALIGN_TOP_RIGHT, -4, 4);
 
-    _fish_img = lv_img_create(_play_panel);
+    // The field clips its children, so pipes slide in/out of the edges cleanly. (Negative
+    // object x here is fine -- LVGL clips before flush; it was only a negative *flush*
+    // offset that crashed the ILI9488, see main.cpp's lv_flush() history.)
+    _field = lv_obj_create(_play_panel);
+    lv_obj_set_size(_field, SCREEN_W, FIELD_H);
+    lv_obj_set_pos(_field, 0, FIELD_Y);
+    lv_obj_set_style_bg_color(_field, lv_color_hex(C_SURFACE), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(_field, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_border_width(_field, 0, LV_PART_MAIN);
+    lv_obj_set_style_radius(_field, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(_field, 0, LV_PART_MAIN);
+    lv_obj_clear_flag(_field, LV_OBJ_FLAG_SCROLLABLE);
 
-    for (int i = 0; i < MAX_ITEMS; i++) {
-        FishItem &it = _items[i];
-        it.label = lv_label_create(_play_panel);
-        lv_obj_set_style_text_font(it.label, &lv_font_montserrat_24, LV_PART_MAIN);
-        lv_obj_add_flag(it.label, LV_OBJ_FLAG_HIDDEN);
-        it.active = false;
+    for (int i = 0; i < MAX_PIPES; i++) {
+        lv_obj_t **parts[2] = { &_pipes[i].top, &_pipes[i].bottom };
+        for (int j = 0; j < 2; j++) {
+            lv_obj_t *o = lv_obj_create(_field);
+            lv_obj_set_style_bg_color(o, lv_color_hex(C_GREEN), LV_PART_MAIN);
+            lv_obj_set_style_bg_opa(o, LV_OPA_COVER, LV_PART_MAIN);
+            lv_obj_set_style_border_width(o, 0, LV_PART_MAIN);
+            lv_obj_set_style_radius(o, 0, LV_PART_MAIN);
+            lv_obj_clear_flag(o, LV_OBJ_FLAG_SCROLLABLE);
+            *parts[j] = o;
+        }
     }
 
-    lv_obj_t *legend = ui_legend(_play_panel);
-    lv_obj_set_width(legend, SCREEN_W - 28);
-    lv_obj_align(legend, LV_ALIGN_BOTTOM_MID, 0, -6);
-    char move_lbl[24];
-    snprintf(move_lbl, sizeof(move_lbl), "%s%s Move", LV_SYMBOL_LEFT, LV_SYMBOL_RIGHT);
-    ui_legend_row(legend, "", lv_color_hex(C_TEXT), move_lbl, lv_color_hex(C_YELLOW));
-    ui_legend_row(legend, "", lv_color_hex(C_TEXT), "Exit", lv_color_hex(C_RED));
+    // Fish created after the pipes so it draws on top of them while blinking through one.
+    _fish_img = lv_img_create(_field);
+    lv_img_set_src(_fish_img, &fish_flap);
+
+    _ready_label = make_text(_field, C_YELLOW, &lv_font_montserrat_20);
+    lv_label_set_text(_ready_label, "Press any button\nto flap!");
+    lv_obj_align(_ready_label, LV_ALIGN_CENTER, 30, 70);
+
+    add_footer(_play_panel, "Any Button = Flap");
 }
 
 static void build_gameover_panel() {
-    _gameover_panel = lv_obj_create(_scr);
-    lv_obj_set_size(_gameover_panel, SCREEN_W, SCREEN_H - HDR_H);
-    lv_obj_align(_gameover_panel, LV_ALIGN_BOTTOM_MID, 0, 0);
-    lv_obj_set_style_bg_opa(_gameover_panel, LV_OPA_TRANSP, LV_PART_MAIN);
-    lv_obj_set_style_border_width(_gameover_panel, 0, LV_PART_MAIN);
-    lv_obj_clear_flag(_gameover_panel, LV_OBJ_FLAG_SCROLLABLE);
-
-    _gameover_label = lv_label_create(_gameover_panel);
-    lv_label_set_long_mode(_gameover_label, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(_gameover_label, 260);
-    lv_obj_set_style_text_color(_gameover_label, lv_color_hex(C_CYAN), LV_PART_MAIN);
-    lv_obj_set_style_text_font(_gameover_label, &lv_font_montserrat_20, LV_PART_MAIN);
-    lv_obj_set_style_text_align(_gameover_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+    _gameover_panel = make_panel();
+    _gameover_label = make_text(_gameover_panel, C_CYAN, &lv_font_montserrat_20);
     lv_obj_align(_gameover_label, LV_ALIGN_CENTER, 0, -10);
-
-    lv_obj_t *legend = ui_legend(_gameover_panel);
-    lv_obj_set_width(legend, SCREEN_W - 28);
-    lv_obj_align(legend, LV_ALIGN_BOTTOM_MID, 0, -6);
-    ui_legend_row(legend, "", lv_color_hex(C_TEXT), "Any Button = Retry", lv_color_hex(C_YELLOW));
-    ui_legend_row(legend, "", lv_color_hex(C_TEXT), "Exit", lv_color_hex(C_RED));
+    add_footer(_gameover_panel, "Any Button = Retry");
 }
 
 static void build_win_panel() {
-    _win_panel = lv_obj_create(_scr);
-    lv_obj_set_size(_win_panel, SCREEN_W, SCREEN_H - HDR_H);
-    lv_obj_align(_win_panel, LV_ALIGN_BOTTOM_MID, 0, 0);
-    lv_obj_set_style_bg_opa(_win_panel, LV_OPA_TRANSP, LV_PART_MAIN);
-    lv_obj_set_style_border_width(_win_panel, 0, LV_PART_MAIN);
-    lv_obj_clear_flag(_win_panel, LV_OBJ_FLAG_SCROLLABLE);
+    _win_panel = make_panel();
 
-    _win_label = lv_label_create(_win_panel);
-    lv_label_set_text(_win_label, "Congrats!\nYou Won Laggy Fish!!!");
-    lv_label_set_long_mode(_win_label, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(_win_label, 260);
-    lv_obj_set_style_text_color(_win_label, lv_color_hex(C_YELLOW), LV_PART_MAIN);
-    lv_obj_set_style_text_font(_win_label, &lv_font_montserrat_24, LV_PART_MAIN);
-    lv_obj_set_style_text_align(_win_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+    _win_label = make_text(_win_panel, C_YELLOW, &lv_font_montserrat_24);
     lv_obj_align(_win_label, LV_ALIGN_CENTER, 0, -130);
 
     // Sparkle ring first, fish image on top -- draw order matters so the fish isn't
@@ -470,23 +553,16 @@ static void build_win_panel() {
         lv_obj_set_style_text_color(lbl, lv_color_hex(C_YELLOW), LV_PART_MAIN);
         lv_obj_set_style_text_font(lbl, &lv_font_montserrat_28, LV_PART_MAIN);
         lv_obj_align(lbl, LV_ALIGN_CENTER, WIN_SPARKLE_OFFSETS[i].x, WIN_SPARKLE_OFFSETS[i].y - 20);
-        _win_sparkles[i] = lbl;
     }
 
-    _win_fish_img = lv_img_create(_win_panel);
-    lv_img_set_src(_win_fish_img, &fish_right);
-    lv_obj_align(_win_fish_img, LV_ALIGN_CENTER, 0, -20);
+    lv_obj_t *fish = lv_img_create(_win_panel);
+    lv_img_set_src(fish, &fish_right);
+    lv_obj_align(fish, LV_ALIGN_CENTER, 0, -20);
 
-    _win_score_label = lv_label_create(_win_panel);
-    lv_obj_set_style_text_color(_win_score_label, lv_color_hex(C_TEXT), LV_PART_MAIN);
-    lv_obj_set_style_text_font(_win_score_label, &lv_font_montserrat_20, LV_PART_MAIN);
-    lv_obj_align(_win_score_label, LV_ALIGN_CENTER, 0, 90);
+    _win_score_label = make_text(_win_panel, C_TEXT, &lv_font_montserrat_20);
+    lv_obj_align(_win_score_label, LV_ALIGN_CENTER, 0, 100);
 
-    lv_obj_t *legend = ui_legend(_win_panel);
-    lv_obj_set_width(legend, SCREEN_W - 28);
-    lv_obj_align(legend, LV_ALIGN_BOTTOM_MID, 0, -6);
-    ui_legend_row(legend, "", lv_color_hex(C_TEXT), "Any Button = Retry", lv_color_hex(C_YELLOW));
-    ui_legend_row(legend, "", lv_color_hex(C_TEXT), "Exit", lv_color_hex(C_RED));
+    add_footer(_win_panel, "Any Button = Retry");
 }
 
 // Loads the Laggy Fish screen, always starting back at the splash/rules screen.

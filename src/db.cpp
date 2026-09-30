@@ -252,6 +252,20 @@ bool db_init() {
     // hardcoded in firmware source. Set these once through the Admin web page's Payment
     // Settings form instead (writes straight to this table, no firmware rebuild needed).
 
+    // Extras minigame high scores, 2026-09-30 — one row per user per game, best score
+    // only (no history). `game` is a short fixed key ('laggy_fish', later 'castle_defense')
+    // so every game shares this one table instead of each growing its own. Brand-new
+    // table, so CREATE TABLE IF NOT EXISTS covers existing cards — no ALTER involved.
+    exec(
+        "CREATE TABLE IF NOT EXISTS game_scores ("
+        "  user_id     INTEGER NOT NULL REFERENCES users(id),"
+        "  game        TEXT NOT NULL,"
+        "  best        INTEGER NOT NULL DEFAULT 0,"
+        "  achieved_at INTEGER,"
+        "  PRIMARY KEY (user_id, game)"
+        ");"
+    );
+
     Serial.println("[DB] schema ready");
     return true;
 }
