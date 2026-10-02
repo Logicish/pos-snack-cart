@@ -30,5 +30,15 @@ void system_alerts_set_sd_write_result(bool ok);
 // data loss for anything written since the last backup.
 void system_alerts_note_restored_from_backup();
 
+// One-shot for this boot session, 2026-10-02 -- the chip last restarted from a brownout,
+// crash, or watchdog rather than a normal power-on (reason is boot_log_reset_reason()).
+// Details for every boot are in /boot_log.csv.
+void system_alerts_note_unexpected_restart(const char *reason);
+
+// Boot-check findings, 2026-10-02 -- scanner, stuck button, data consistency, missing
+// game files. One-shot for this boot session, up to 6, shown in the order added after
+// the built-in conditions above. `msg` must be a string literal (stored by pointer).
+void system_alerts_add_boot_issue(const char *msg);
+
 bool        system_alerts_active();   // true if at least one warning is currently active
 const char *system_alerts_message();  // the single most urgent active message, or "" if none

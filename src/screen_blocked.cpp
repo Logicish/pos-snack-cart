@@ -37,13 +37,14 @@ void screen_blocked_push(const char *message) {
         lv_obj_align(_lbl, LV_ALIGN_CENTER, 0, -14);  // nudged up slightly to clear the footer below
 
         lv_obj_t *legend = ui_legend(_scr);
-        lv_obj_set_width(legend, SCREEN_W - 28);
+        lv_obj_set_width(legend, SCREEN_W - 24);
         lv_obj_align(legend, LV_ALIGN_BOTTOM_MID, 0, -6);
         ui_legend_row(legend, "", lv_color_hex(C_TEXT), "Back", lv_color_hex(C_RED));
     }
 
     header_set_visible(true);
     header_set_current_user("");
+    header_set_title("SORRY");  // was never set -- kept whatever the last screen said
     lv_label_set_text(_lbl, message);
 
     ButtonHandlers h;

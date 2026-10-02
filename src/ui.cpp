@@ -51,5 +51,5 @@ void ui_footer_cancel(lv_obj_t *parent) {
     lv_label_set_text(lbl, "Cancel");
     lv_obj_set_style_text_color(lbl, lv_color_hex(C_RED), LV_PART_MAIN);
     lv_obj_set_style_text_font(lbl, &lv_font_montserrat_16, LV_PART_MAIN);
-    lv_obj_align(lbl, LV_ALIGN_BOTTOM_RIGHT, -16, -14);
+    lv_obj_align(lbl, LV_ALIGN_BOTTOM_RIGHT, -12, -6);  // same spot as a legend's "Back"
 }

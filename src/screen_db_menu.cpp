@@ -147,7 +147,7 @@ static void build_restore_confirm_screen() {
     lv_obj_align(content, LV_ALIGN_BOTTOM_MID, 0, 0);
     lv_obj_set_style_bg_opa(content, LV_OPA_TRANSP, LV_PART_MAIN);
     lv_obj_set_style_border_width(content, 0, LV_PART_MAIN);
-    lv_obj_set_style_pad_hor(content, 16, LV_PART_MAIN);
+    lv_obj_set_style_pad_hor(content, 12, LV_PART_MAIN);
     lv_obj_set_style_pad_ver(content, 16, LV_PART_MAIN);
     // The footer legend is this flex column's last child, so pad_ver's bottom inset was
     // also its distance from the true screen edge -- overridden separately to match the
@@ -163,8 +163,8 @@ static void build_restore_confirm_screen() {
     lv_obj_t *prompt = lv_label_create(content);
     lv_label_set_long_mode(prompt, LV_LABEL_LONG_WRAP);
     lv_label_set_text(prompt,
-        "Restore the last backup over the live database? Anything written since the "
-        "last backup (a checkout, an edit) will be lost.");
+        "Restore the newest backup that passes the full check? Anything written "
+        "since that backup (a checkout, an edit) will be lost.");
     lv_obj_set_style_text_color(prompt, lv_color_hex(C_TEXT), LV_PART_MAIN);
     lv_obj_set_style_text_font(prompt, &lv_font_montserrat_16, LV_PART_MAIN);
     lv_obj_set_width(prompt, LV_PCT(100));
@@ -223,6 +223,7 @@ void screen_db_menu_push() {
         lv_obj_set_style_bg_opa(list, LV_OPA_TRANSP, LV_PART_MAIN);
         lv_obj_set_style_border_width(list, 0, LV_PART_MAIN);
         lv_obj_set_style_pad_all(list, 14, LV_PART_MAIN);
+        lv_obj_set_style_pad_hor(list, 12, LV_PART_MAIN);  // 12px side inset, same as every screen
         lv_obj_set_style_pad_row(list, 10, LV_PART_MAIN);
         lv_obj_set_layout(list, LV_LAYOUT_FLEX);
         lv_obj_set_flex_flow(list, LV_FLEX_FLOW_COLUMN);
@@ -246,7 +247,7 @@ void screen_db_menu_push() {
         }
 
         lv_obj_t *legend = ui_legend(_scr);
-        lv_obj_set_width(legend, SCREEN_W - 28);
+        lv_obj_set_width(legend, SCREEN_W - 24);
         lv_obj_align(legend, LV_ALIGN_BOTTOM_MID, 0, -6);
         char move_lbl[24];
         snprintf(move_lbl, sizeof(move_lbl), "%s%s Move", LV_SYMBOL_UP, LV_SYMBOL_DOWN);

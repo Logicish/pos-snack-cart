@@ -34,15 +34,37 @@ bool db_config_set(const char *key, const char *value);
 // the journal resets, so a raw copy at that moment needs no live SQLite involvement to be
 // correct. db_restore_from_backup() is meant to run BEFORE db_init() (or after db_close()),
 // never while a handle is open on pos.db.
-bool db_backup_now();          // copies /pos.db -> /pos_backup.db
-bool db_restore_from_backup(); // copies /pos_backup.db -> /pos.db; false if no backup exists
+//
+// 2026-10-02 rework: five rolling copies instead of one, every copy verified, and nothing
+// copied or restored without passing the deep check below first.
+//  - Slots: /pos_backup.db (newest -- also what Download database sends) then
+//    /pos_backup1.db .. /pos_backup4.db, oldest last.
+//  - db_backup_now() refuses to back up a live DB that fails the deep check (so damage
+//    never rotates into the copies), writes to a temp file, compares it byte-for-byte
+//    against pos.db, and only then rotates the slots and renames it into place.
+//  - Restore picks the newest slot that passes the deep check (opened read-only, nothing
+//    written just to look), copies it in the same verified way, and drops any stale
+//    pos.db-journal so a leftover journal can't be replayed onto the restored file.
+bool db_backup_now();                    // verified copy of /pos.db into the newest slot
+int  db_find_good_backup(bool need_admin); // newest slot passing the deep check (and holding
+                                           // an admin row, if asked), or -1. Read-only.
+bool db_restore_backup_slot(int slot);   // verified copy of that slot over /pos.db; DB must be closed
+bool db_restore_from_backup();           // db_find_good_backup(false) + db_restore_backup_slot()
 
-// A quick, proven-primitive sanity check (plain SELECT, no PRAGMA — see the backup note
-// above for why PRAGMAs aren't trusted blind on this build). Confirms the schema is
-// actually queryable, not just that the file opened. Not real corruption detection (this
-// SQLite build has none available) — only catches "the DB is unreadable," used at boot to
-// decide whether to fall back to the backup.
+// Deep check, 2026-10-02 (was a single COUNT(*) on users). PRAGMA integrity_check returns
+// nothing on this build, so instead this reads every row and column of every table, and
+// walks every index in order -- forcing SQLite to touch every page of the file, where a
+// damaged page makes the read fail with an error. Also requires the core tables to exist.
+// Well under a second at this cart's data size.
 bool db_sanity_check();
+
+// Data consistency check, 2026-10-02 -- the deep check above finds damaged pages; this
+// finds rows that read fine but don't add up: a sale whose total isn't the sum of its
+// lines, a sale with no lines, line items pointing at a missing sale or item, a barcode
+// linked to a missing item, a sale for a missing person, a negative price. Report-only --
+// nothing is changed. Writes "ok" or e.g. "total_mismatch=2,orphan_lines=1" to `summary`
+// and returns how many kinds of problem were found.
+int db_consistency_check(char *summary, size_t summary_len);
 
 // SD-card-layer check, 2026-09-14 — distinct from db_sanity_check() above, which only
 // proves the DB's own schema is queryable, not that the card underneath it is actually
@@ -53,3 +75,9 @@ bool db_sanity_check();
 // wrong with the card itself (write-protected, failing, wrong card) — not something a DB
 // restore can fix, since the restore path needs the same write access this test checks.
 bool sd_write_read_test();
+
+// Boot cleanup, 2026-10-02: deletes scratch files a power cut could have left behind (a
+// half-written backup/restore copy, the SD write-test file, the report-download scratch).
+// Never touches pos.db-journal -- after a power cut that journal is exactly what SQLite
+// uses to repair pos.db on open. Returns how many files it removed.
+int sd_cleanup_temp_files();

@@ -107,6 +107,7 @@ void screen_payment_menu_push() {
         lv_obj_set_style_bg_opa(list, LV_OPA_TRANSP, LV_PART_MAIN);
         lv_obj_set_style_border_width(list, 0, LV_PART_MAIN);
         lv_obj_set_style_pad_all(list, 14, LV_PART_MAIN);
+        lv_obj_set_style_pad_hor(list, 12, LV_PART_MAIN);  // 12px side inset, same as every screen
         lv_obj_set_style_pad_row(list, 10, LV_PART_MAIN);
         lv_obj_set_layout(list, LV_LAYOUT_FLEX);
         lv_obj_set_flex_flow(list, LV_FLEX_FLOW_COLUMN);
@@ -135,7 +136,7 @@ void screen_payment_menu_push() {
         }
 
         lv_obj_t *legend = ui_legend(_scr);
-        lv_obj_set_width(legend, SCREEN_W - 28);
+        lv_obj_set_width(legend, SCREEN_W - 24);
         lv_obj_align(legend, LV_ALIGN_BOTTOM_MID, 0, -6);
         char move_lbl[24];
         snprintf(move_lbl, sizeof(move_lbl), "%s%s Move", LV_SYMBOL_UP, LV_SYMBOL_DOWN);

@@ -459,7 +459,7 @@ static lv_obj_t *make_text(lv_obj_t *parent, uint32_t color, const lv_font_t *fo
 
 static void add_footer(lv_obj_t *panel, const char *action) {
     lv_obj_t *legend = ui_legend(panel);
-    lv_obj_set_width(legend, SCREEN_W - 28);
+    lv_obj_set_width(legend, SCREEN_W - 24);
     lv_obj_align(legend, LV_ALIGN_BOTTOM_MID, 0, -6);
     ui_legend_row(legend, "", lv_color_hex(C_TEXT), action, lv_color_hex(C_YELLOW));
     ui_legend_row(legend, "", lv_color_hex(C_TEXT), "Exit", lv_color_hex(C_RED));

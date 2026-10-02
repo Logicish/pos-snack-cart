@@ -68,6 +68,18 @@ void screen_splash_push() {
 
     lv_scr_load(_scr);
 
+    screen_splash_release(SPLASH_DURATION_MS);
+}
+
+// Boot's version, 2026-10-02: same screen, but no timer -- it goes up before the DB is even
+// mounted and stays through all of boot, until setup() calls screen_splash_release().
+void screen_splash_hold() {
+    screen_splash_push();
+    if (_timer) { lv_timer_del(_timer); _timer = nullptr; }
+}
+
+// Starts (or restarts) the countdown to IDLE, hold_ms from now.
+void screen_splash_release(uint32_t hold_ms) {
     if (_timer) lv_timer_del(_timer);
-    _timer = lv_timer_create(cb_timeout, SPLASH_DURATION_MS, nullptr);
+    _timer = lv_timer_create(cb_timeout, hold_ms, nullptr);
 }

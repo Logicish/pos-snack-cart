@@ -177,6 +177,7 @@ void screen_set_clock_push() {
         lv_obj_set_style_bg_opa(content, LV_OPA_TRANSP, LV_PART_MAIN);
         lv_obj_set_style_border_width(content, 0, LV_PART_MAIN);
         lv_obj_set_style_pad_all(content, 14, LV_PART_MAIN);
+        lv_obj_set_style_pad_hor(content, 12, LV_PART_MAIN);  // 12px side inset, same as every screen
         // Overridden separately from pad_all -- the legend is the last child of this flex
         // column, so pad_all's bottom inset was also the legend's distance from the true
         // screen edge, leaving it floating ~14px up instead of the ~6px margin every other

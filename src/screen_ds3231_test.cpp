@@ -4,6 +4,7 @@
 #include "theme.h"
 #include "buttons.h"
 #include "rtc.h"
+#include "clock_health.h"
 #include "ui.h"
 #include <lvgl.h>
 #include <Arduino.h>
@@ -30,20 +31,20 @@ static void refresh_report() {
     String out;
 
     if (!rtc_available()) {
-        out += "DS3231: NOT FOUND\n\n"
+        out += "DS3231: NOT FOUND\n"
                "Not responding on I2C\n"
                "(SDA=5, SCL=4). Check\n"
                "wiring/pull-ups/VCC.\n\n";
     } else {
         out += "DS3231: Found\n";
         out += rtc_lost_power() ? "Lost Power: YES (time not\ntrustworthy -- Sync To RTC\nto fix)\n\n"
-                                 : "Lost Power: No\n\n";
+                                 : "Lost Power: No\n";
 
         struct tm rtc_tm;
         if (rtc_read(&rtc_tm)) {
             char buf[24];
             format_tm(rtc_tm, buf, sizeof(buf));
-            out += "RTC time:\n" + String(buf) + "\n\n";
+            out += "RTC time:\n" + String(buf) + "\n";
         }
     }
 
@@ -52,7 +53,25 @@ static void refresh_report() {
     gmtime_r(&now, &sys_tm);
     char buf[24];
     format_tm(sys_tm, buf, sizeof(buf));
-    out += "System time:\n" + String(buf);
+    out += "System time:\n" + String(buf) + "\n";
+
+    // Clock health, 2026-10-02 -- the same check boot runs (see clock_health.h).
+    clock_health_check();
+    time_t last = clock_last_sale_time();
+    if (last > 0) {
+        struct tm last_tm;
+        gmtime_r(&last, &last_tm);
+        format_tm(last_tm, buf, sizeof(buf));
+        out += "Last sale:\n" + String(buf) + "\n";
+    }
+    const char *problem = clock_health_alert();
+    out += "\nClock check: ";
+    out += problem ? "PROBLEM\n" : "OK";
+    if (clock_health_flags() & CLOCK_BAD_YEAR)         out += "- Year looks wrong\n";
+    if (clock_health_flags() & CLOCK_BEHIND_LAST_SALE) out += "- Earlier than last sale\n";
+    if (clock_health_flags() & CLOCK_LOST_POWER)       out += "- Battery lost power\n";
+    if (clock_health_flags() & CLOCK_NO_RTC)           out += "- Clock chip missing\n";
+    if (problem) out += "Fix: Settings > Set Clock";
 
     lv_label_set_text(_lbl, out.c_str());
 }

@@ -1,5 +1,6 @@
 #include "system_alerts.h"
 #include "db.h"
+#include "clock_health.h"
 #include <Arduino.h>
 #include <SD.h>
 
@@ -20,6 +21,10 @@ static bool _db_unavailable;
 static bool _sd_write_failed;   // set explicitly, see system_alerts_set_sd_write_result()
 static bool _sd_write_known;    // false until the write test has actually run at least once
 static bool _restored_from_backup;  // one-shot for this boot session
+static char _restart_msg[48];      // one-shot for this boot session, "" if the restart was normal
+#define MAX_BOOT_ISSUES 6
+static const char *_boot_issues[MAX_BOOT_ISSUES];  // see system_alerts_add_boot_issue()
+static int         _boot_issue_count;
 
 // Priority order, most severe first -- only the single top active message is shown, to
 // keep the banner one line. A count of any other active conditions is appended so nothing
@@ -37,8 +42,12 @@ static const char *top_message(int *extra_count) {
     consider(_sd_missing,          "NO SD CARD DETECTED");
     consider(_db_unavailable,      "DATABASE UNAVAILABLE");
     consider(_restored_from_backup,"DB RESTORED FROM BACKUP THIS BOOT");
+    consider(_restart_msg[0] != '\0', _restart_msg);
     consider(_sd_write_known && _sd_write_failed, "SD CARD NOT WRITABLE");
     consider(_sd_low_space,        "LOW SD CARD SPACE");
+    const char *clock_msg = clock_health_alert();
+    consider(clock_msg != nullptr, clock_msg);
+    for (int i = 0; i < _boot_issue_count; i++) consider(true, _boot_issues[i]);
 
     *extra_count = active > 0 ? active - 1 : 0;
     return first;
@@ -59,6 +68,7 @@ void system_alerts_refresh() {
     }
 
     _db_unavailable = (db_handle() == nullptr);
+    clock_health_check();  // re-asks the chip -- a Set Clock since boot clears it here
 }
 
 // Records the outcome of an SD write/read test run elsewhere (main.cpp at boot,
@@ -71,6 +81,20 @@ void system_alerts_set_sd_write_result(bool ok) {
 // Marks this boot as having recovered the DB from a backup copy.
 void system_alerts_note_restored_from_backup() {
     _restored_from_backup = true;
+}
+
+// Marks this boot as following an unexpected restart (brownout/crash/watchdog).
+void system_alerts_note_unexpected_restart(const char *reason) {
+    snprintf(_restart_msg, sizeof(_restart_msg), "UNEXPECTED RESTART: %s", reason);
+}
+
+// Records one boot-check finding (string literal) for this boot session.
+void system_alerts_add_boot_issue(const char *msg) {
+    // The SD error screen's Retry re-runs boot_try_init_db() -- don't stack repeats.
+    for (int i = 0; i < _boot_issue_count; i++) {
+        if (strcmp(_boot_issues[i], msg) == 0) return;
+    }
+    if (_boot_issue_count < MAX_BOOT_ISSUES) _boot_issues[_boot_issue_count++] = msg;
 }
 
 // True if at least one tracked condition is currently active.

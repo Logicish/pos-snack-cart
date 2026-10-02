@@ -4,14 +4,13 @@
   Author--- LogicishDesigns
   Date----- September 2026
   Function- AP-mode WiFi + admin web portal declarations -- radio on/off control and
-            the two config-backed passwords (WiFi AP, admin login) that gate it. The
-            HTTP routes/pages themselves are all internal to webserver.cpp.
+            the config-backed WiFi AP password that gates it. The HTTP routes/pages
+            themselves are all internal to webserver.cpp.
 */
 
-// AP-mode WiFi + admin web portal. Viewing pages is open to anyone on the AP (the AP
-// password itself is the first gate, see webserver_ap_password() below); editing anything
-// (items, users, settings) requires an admin login — see the session/login section in
-// webserver.cpp.
+// AP-mode WiFi + admin web portal. No web login (removed 2026-09-29): the AP only runs
+// while an admin has the Web Portal screen open on the cart, and the WiFi password (see
+// webserver_ap_password() below) is the only gate on the network side.
 //
 // 2026-08-28 — the radio used to come up unconditionally at boot (webserver_init() called
 // WiFi.mode(WIFI_AP)/softAP() directly). Split on request: webserver_init() now only

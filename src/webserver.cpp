@@ -9,6 +9,7 @@
 #include "backlight.h"
 #include "screen_screensaver.h"
 #include "rtc.h"
+#include "boot_log.h"
 #include <sys/time.h>
 #include <Arduino.h>
 
@@ -997,7 +998,8 @@ static String render_admin_page(AsyncWebServerRequest *request) {
     html += "<tr><td>Free memory</td><td>" + String(ESP.getFreeHeap() / 1024) + " KB</td></tr>";
     html += "<tr><td>Phones connected</td><td>" + String(WiFi.softAPgetStationNum()) + "</td></tr>";
     html += "</table><form method='POST' action='/admin/backup'><button>Back up now</button></form> "
-            "<a class='btn' href='/admin-download-db'>Download database</a>"
+            "<a class='btn' href='/admin-download-db'>Download database</a> "
+            "<a class='btn' href='/admin-download-bootlog'>Download boot log</a>"
             "<p class='muted'>Back up now saves a copy on the SD card (also automatic when the Web "
             "Portal closes). Download database saves a copy to this phone. If the SD card ever "
             "fails, copy that file onto a new card named pos.db and everything comes back as of "
@@ -1082,6 +1084,20 @@ static void handle_admin_download_db(AsyncWebServerRequest *request) {
     request->send(request->beginResponse(db, name, "application/octet-stream", true));
 }
 
+// GET /admin-download-bootlog -- /boot_log.csv as-is (one line per boot: time, restart
+// reason, each boot check's result -- see boot_log.h). Own path for the same reason as
+// /admin-download-db.
+static void handle_admin_download_bootlog(AsyncWebServerRequest *request) {
+    session_timer_reset();
+    if (!SD.exists(BOOT_LOG_PATH)) {
+        request->send(404, "text/plain", "No boot log on the SD card yet.");
+        return;
+    }
+    // File-based response names the download itself -- see handle_admin_download_db().
+    File log = SD.open(BOOT_LOG_PATH);
+    request->send(request->beginResponse(log, "/snackcart-boot-log.csv", "text/csv", true));
+}
+
 // POST /admin/backup -- copies pos.db to pos_backup.db right now.
 static void handle_admin_backup(AsyncWebServerRequest *request) {
     session_timer_reset();  // web activity keeps the cart from auto-logging out
@@ -1147,6 +1163,7 @@ void webserver_init() {
     _server.on("/user/edit", HTTP_POST, handle_user_edit);
     _server.on("/user/delete", HTTP_POST, handle_user_delete);
     _server.on("/admin-download-db", HTTP_GET, handle_admin_download_db);  // not "/admin/..." -- "/admin" would catch it
+    _server.on("/admin-download-bootlog", HTTP_GET, handle_admin_download_bootlog);
     _server.on("/admin", HTTP_GET, handle_admin);
     _server.on("/admin/settings", HTTP_POST, handle_admin_settings);
     _server.on("/admin/clock", HTTP_POST, handle_admin_clock);

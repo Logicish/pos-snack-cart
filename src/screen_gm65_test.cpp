@@ -270,7 +270,7 @@ static void build_qr_confirm_ui() {
     lv_obj_align(content, LV_ALIGN_BOTTOM_MID, 0, 0);
     lv_obj_set_style_bg_opa(content, LV_OPA_TRANSP, LV_PART_MAIN);
     lv_obj_set_style_border_width(content, 0, LV_PART_MAIN);
-    lv_obj_set_style_pad_hor(content, 16, LV_PART_MAIN);
+    lv_obj_set_style_pad_hor(content, 12, LV_PART_MAIN);
     lv_obj_set_style_pad_ver(content, 16, LV_PART_MAIN);
     // The footer legend is this flex column's last child, so pad_ver's bottom inset was
     // also its distance from the true screen edge -- overridden separately to match the
@@ -397,7 +397,7 @@ void screen_gm65_test_push() {
         lv_obj_align(_log_lbl, LV_ALIGN_BOTTOM_MID, 0, -(FOOTER_H + 10));
 
         lv_obj_t *legend = ui_legend(_scr);
-        lv_obj_set_width(legend, SCREEN_W - 28);
+        lv_obj_set_width(legend, SCREEN_W - 24);
         lv_obj_align(legend, LV_ALIGN_BOTTOM_MID, 0, -6);
         char move_lbl[24];
         snprintf(move_lbl, sizeof(move_lbl), "%s%s Move", LV_SYMBOL_UP, LV_SYMBOL_DOWN);

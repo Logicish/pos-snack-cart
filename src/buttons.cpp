@@ -137,6 +137,11 @@ static ButtonHandlers _handlers;
 // see ButtonHandlers::fastTaps.
 static volatile bool _latched[BTN_COUNT];
 
+// Set by buttons_check_stuck() at boot for any button already held down; that button
+// is ignored until it reads released, then this clears and it behaves normally.
+static bool _stuck[BTN_COUNT];
+static const char *BTN_NAMES[BTN_COUNT] = { "Up", "Down", "Left", "Right", "Enter", "Back" };
+
 static void IRAM_ATTR on_press_edge(void *arg) {
     _latched[(int)(intptr_t)arg] = true;
 }
@@ -211,6 +216,16 @@ void buttons_poll() {
         // debounce below. Latches while already pressed (release bounce) are just dropped.
         bool latched = _latched[i];
         _latched[i] = false;
+
+        if (_stuck[i]) {
+            if (raw) continue;     // still held/shorted -- ignore it completely
+            _stuck[i] = false;     // finally released: from here on it's a normal button
+            b.stableRaw = false;
+            b.pressed   = false;
+            b.lastChangeMs = now;
+            Serial.printf("[BTN] %s released -- no longer ignored\n", BTN_NAMES[i]);
+            continue;
+        }
         if (latched && _handlers.fastTaps && !b.pressed) {
             b.pressed      = true;
             b.stableRaw    = raw;
@@ -266,4 +281,19 @@ void buttons_poll() {
             }
         }
     }
+}
+
+// Marks any button already reading pressed as stuck (see buttons.h).
+int buttons_check_stuck(char *names, size_t names_len) {
+    names[0] = '\0';
+    int count = 0;
+    for (int i = 0; i < BTN_COUNT; i++) {
+        if (digitalRead(_btn[i].pin) != LOW) continue;
+        _stuck[i] = true;
+        count++;
+        size_t len = strlen(names);
+        snprintf(names + len, names_len - len, "%s%s", len ? "+" : "", BTN_NAMES[i]);
+        Serial.printf("[BTN] %s reads pressed at boot -- ignored until released\n", BTN_NAMES[i]);
+    }
+    return count;
 }

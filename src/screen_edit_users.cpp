@@ -161,6 +161,7 @@ static void build_list_ui() {
     lv_obj_set_style_bg_opa(list, LV_OPA_TRANSP, LV_PART_MAIN);
     lv_obj_set_style_border_width(list, 0, LV_PART_MAIN);
     lv_obj_set_style_pad_all(list, 8, LV_PART_MAIN);
+    lv_obj_set_style_pad_hor(list, 0, LV_PART_MAIN);  // 12px side inset, same as every screen
     lv_obj_set_style_pad_row(list, 6, LV_PART_MAIN);
     lv_obj_set_layout(list, LV_LAYOUT_FLEX);
     lv_obj_set_flex_flow(list, LV_FLEX_FLOW_COLUMN);

@@ -24,6 +24,7 @@
 #include "screen_sdinfo.h"
 #include "screen_db_menu.h"
 #include "screen_ds3231_test.h"
+#include "screen_boot_log.h"
 #include "header.h"
 #include "theme.h"
 #include "buttons.h"
@@ -37,7 +38,7 @@
   Function- Implements the Advanced Tools submenu declared in screen_admin_tools.h.
 */
 
-#define MENU_COUNT 4
+#define MENU_COUNT 5
 #define FOOTER_H   52
 
 // Deliberately a touch smaller than the visible row count so successive presses always
@@ -55,6 +56,7 @@ static const char *MENU_LABELS[MENU_COUNT] = {
     "2. DB",
     "3. Scanner",
     "4. DS3231 Test",
+    "5. Boot Log",
 };
 
 // Highlights the currently-selected row.
@@ -114,6 +116,7 @@ static void cb_enter() {
         case 1: screen_db_menu_push();     break;
         case 2: screen_gm65_test_push();   break;
         case 3: screen_ds3231_test_push(); break;
+        case 4: screen_boot_log_push();    break;
     }
 }
 
@@ -132,6 +135,7 @@ void screen_admin_tools_push() {
         lv_obj_set_style_bg_opa(list, LV_OPA_TRANSP, LV_PART_MAIN);
         lv_obj_set_style_border_width(list, 0, LV_PART_MAIN);
         lv_obj_set_style_pad_all(list, 14, LV_PART_MAIN);
+        lv_obj_set_style_pad_hor(list, 12, LV_PART_MAIN);  // 12px side inset, same as every screen
         lv_obj_set_style_pad_row(list, 10, LV_PART_MAIN);
         lv_obj_set_layout(list, LV_LAYOUT_FLEX);
         lv_obj_set_flex_flow(list, LV_FLEX_FLOW_COLUMN);
@@ -154,7 +158,7 @@ void screen_admin_tools_push() {
         }
 
         lv_obj_t *legend = ui_legend(_scr);
-        lv_obj_set_width(legend, SCREEN_W - 28);
+        lv_obj_set_width(legend, SCREEN_W - 24);
         lv_obj_align(legend, LV_ALIGN_BOTTOM_MID, 0, -6);
         char move_lbl[24], page_lbl[24];
         snprintf(move_lbl, sizeof(move_lbl), "Move %s%s", LV_SYMBOL_UP, LV_SYMBOL_DOWN);

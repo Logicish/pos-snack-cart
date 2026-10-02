@@ -157,6 +157,7 @@ void screen_sdinfo_push() {
         lv_obj_set_style_bg_opa(_content, LV_OPA_TRANSP, LV_PART_MAIN);
         lv_obj_set_style_border_width(_content, 0, LV_PART_MAIN);
         lv_obj_set_style_pad_all(_content, 16, LV_PART_MAIN);
+        lv_obj_set_style_pad_hor(_content, 12, LV_PART_MAIN);  // 12px side inset, same as every screen
         lv_obj_set_style_pad_row(_content, 4, LV_PART_MAIN);
         lv_obj_set_layout(_content, LV_LAYOUT_FLEX);
         lv_obj_set_flex_flow(_content, LV_FLEX_FLOW_COLUMN);

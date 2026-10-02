@@ -313,7 +313,7 @@ static void build_delete_confirm_ui() {
     lv_obj_align(content, LV_ALIGN_BOTTOM_MID, 0, 0);
     lv_obj_set_style_bg_opa(content, LV_OPA_TRANSP, LV_PART_MAIN);
     lv_obj_set_style_border_width(content, 0, LV_PART_MAIN);
-    lv_obj_set_style_pad_hor(content, 16, LV_PART_MAIN);
+    lv_obj_set_style_pad_hor(content, 12, LV_PART_MAIN);
     lv_obj_set_style_pad_ver(content, 16, LV_PART_MAIN);
     lv_obj_set_style_pad_row(content, 10, LV_PART_MAIN);
     lv_obj_set_layout(content, LV_LAYOUT_FLEX);
@@ -459,6 +459,7 @@ void screen_item_edit_push(int item_id, void (*on_back)()) {
         lv_obj_set_style_bg_opa(content, LV_OPA_TRANSP, LV_PART_MAIN);
         lv_obj_set_style_border_width(content, 0, LV_PART_MAIN);
         lv_obj_set_style_pad_all(content, 14, LV_PART_MAIN);
+        lv_obj_set_style_pad_hor(content, 12, LV_PART_MAIN);  // 12px side inset, same as every screen
         // Overridden separately from pad_all -- the legend is the last child of this flex
         // column, so pad_all's bottom inset was also the legend's distance from the true
         // screen edge, leaving it floating ~14px up instead of the ~6px margin every other

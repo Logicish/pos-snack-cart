@@ -41,6 +41,7 @@ void screen_webportal_push() {
         lv_obj_set_style_bg_opa(content, LV_OPA_TRANSP, LV_PART_MAIN);
         lv_obj_set_style_border_width(content, 0, LV_PART_MAIN);
         lv_obj_set_style_pad_all(content, 16, LV_PART_MAIN);
+        lv_obj_set_style_pad_hor(content, 12, LV_PART_MAIN);  // 12px side inset, same as every screen
         lv_obj_set_style_pad_row(content, 6, LV_PART_MAIN);
         lv_obj_set_layout(content, LV_LAYOUT_FLEX);
         lv_obj_set_flex_flow(content, LV_FLEX_FLOW_COLUMN);

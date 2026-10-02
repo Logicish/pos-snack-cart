@@ -92,7 +92,12 @@ int checkout_save(int user_id, const CheckoutLine *lines, int line_count, int to
         }
     }
 
-    if (!exec(db, "COMMIT;")) return -1;
+    // A failed COMMIT can leave the transaction open, and every later BEGIN would then
+    // fail until a reboot -- roll it back so the next Confirm press can retry cleanly.
+    if (!exec(db, "COMMIT;")) {
+        exec(db, "ROLLBACK;");
+        return -1;
+    }
 
     Serial.printf("[CHECKOUT] Saved checkout %d for user %d: %d lines, $%d.%02d\n",
                   checkout_id, user_id, line_count, total_cents / 100, total_cents % 100);

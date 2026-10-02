@@ -37,10 +37,10 @@ static void refresh_message() {
               "insert one and press Enter to retry.";
     } else if (!db_handle()) {
         msg = "SD card found, but the database could not be opened -- even after trying "
-              "the backup copy.\n\nTry a different SD card, or press Enter to retry.";
+              "every backup copy.\n\nTry a different SD card, or press Enter to retry.";
     } else {
-        msg = "SD card found and the database opened, but a basic check on it still "
-              "failed.\n\nPress Enter to retry, or try a different SD card.";
+        msg = "SD card found and the database opened, but the full check on it still "
+              "failed, and no backup copy passed it either.\n\nPress Enter to retry, or try a different SD card.";
     }
 
     lv_label_set_text(_lbl, msg.c_str());

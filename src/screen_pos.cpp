@@ -68,6 +68,9 @@ static int        _cart_prev_cursor;
 // (adding/deleting a line, etc). Empty string = nothing to show.
 static char _scan_msg[48];
 
+// Set when Confirm's checkout_save() fails; build_payment_ui() shows it once, then clears it.
+static bool _save_failed;
+
 // ST_MANUAL_ENTRY's catalog picker — GM65 isn't wired to the device yet, so this is also
 // how the whole flow gets exercised without hardware: pick items from the same list
 // Price Check uses instead of scanning them. Row-pool + partial-refresh pattern matches
@@ -321,7 +324,10 @@ static void cb_pay_complete() {
     int id = checkout_save(_user_id, lines, _cart_count, _total_cents);
     if (id < 0) {
         Serial.println("[POS] checkout_save() failed — cart kept, staying on Payment");
-        return;  // don't lose the cart on a DB failure
+        _save_failed = true;  // don't lose the cart on a DB failure -- say so on screen
+        lv_obj_clean(_content);
+        build_payment_ui();
+        return;
     }
     _cart_count  = 0;
     _total_cents = 0;
@@ -363,6 +369,7 @@ static void build_list_ui() {
     lv_obj_set_style_bg_opa(list, LV_OPA_TRANSP, LV_PART_MAIN);
     lv_obj_set_style_border_width(list, 0, LV_PART_MAIN);
     lv_obj_set_style_pad_all(list, 8, LV_PART_MAIN);
+    lv_obj_set_style_pad_hor(list, 0, LV_PART_MAIN);  // 12px side inset, same as every screen
     lv_obj_set_style_pad_row(list, 6, LV_PART_MAIN);
     lv_obj_set_layout(list, LV_LAYOUT_FLEX);
     lv_obj_set_flex_flow(list, LV_FLEX_FLOW_COLUMN);
@@ -507,6 +514,7 @@ static void build_manual_entry_ui() {
     lv_obj_set_style_bg_opa(list, LV_OPA_TRANSP, LV_PART_MAIN);
     lv_obj_set_style_border_width(list, 0, LV_PART_MAIN);
     lv_obj_set_style_pad_all(list, 8, LV_PART_MAIN);
+    lv_obj_set_style_pad_hor(list, 0, LV_PART_MAIN);  // 12px side inset, same as every screen
     lv_obj_set_style_pad_row(list, 6, LV_PART_MAIN);
     lv_obj_set_layout(list, LV_LAYOUT_FLEX);
     lv_obj_set_flex_flow(list, LV_FLEX_FLOW_COLUMN);
@@ -686,6 +694,17 @@ static void build_payment_ui() {
     lv_obj_set_style_text_font(total_lbl, &lv_font_montserrat_20, LV_PART_MAIN);
     lv_obj_set_width(total_lbl, LV_PCT(100));
     lv_obj_set_style_text_align(total_lbl, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+
+    if (_save_failed) {
+        lv_obj_t *err = lv_label_create(_content);
+        lv_label_set_text(err, "Couldn't save. Press Confirm\nto try again.");
+        lv_label_set_long_mode(err, LV_LABEL_LONG_WRAP);
+        lv_obj_set_style_text_color(err, lv_color_hex(C_RED), LV_PART_MAIN);
+        lv_obj_set_style_text_font(err, &lv_font_montserrat_16, LV_PART_MAIN);
+        lv_obj_set_width(err, LV_PCT(100));
+        lv_obj_set_style_text_align(err, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+        _save_failed = false;  // one-shot, like _scan_msg
+    }
 
     lv_obj_t *grow = lv_obj_create(_content);
     lv_obj_set_size(grow, LV_PCT(100), 1);

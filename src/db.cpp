@@ -1,4 +1,5 @@
 #include "db.h"
+#include "report_export.h"  // REPORT_TMP_PATH, for sd_cleanup_temp_files()
 #include <Arduino.h>
 #include <SPI.h>
 #include <SD.h>
@@ -122,8 +123,8 @@ bool db_init() {
     // `admin`/`active` added after some real users already existed on-device.
     // column_exists() guards each ALTER so it only ever runs once per column, not every
     // boot — see that helper's comment for why (a real on-device failure was traced to
-    // re-running ALTER on an already-existing column). `admin` isn't used to gate
-    // anything yet (no web login exists). `active` (2026-08-24) is: a badge scan for an
+    // re-running ALTER on an already-existing column). `admin` gates Admin Login on the
+    // cart (and with it the Web Portal). `active` (2026-08-24): a badge scan for an
     // inactive user gets turned away with a message instead of starting a transaction —
     // a non-destructive way to "boot" someone (e.g. an outstanding balance) without
     // touching their checkout history or deleting the row.
@@ -131,9 +132,9 @@ bool db_init() {
     if (!column_exists("users", "active")) exec("ALTER TABLE users ADD COLUMN active INTEGER NOT NULL DEFAULT 1;");
     // Admin web-portal login used a per-admin salted SHA-256 password (see auth.cpp,
     // password_hash/password_salt/password_is_default columns) from 2026-08-25 until
-    // 2026-09-14, when it was dropped for a single shared plaintext password (see
-    // webserver.cpp's ADMIN_PASSWORD_CONFIG_KEY) -- this device's AP is off most of the
-    // time, local-range-only, no real threat model to justify the complexity. Those three
+    // 2026-09-14, when it was dropped for a single shared plaintext password, itself
+    // removed 2026-09-29 -- the web portal has no login now (cart Admin Login + the WiFi
+    // password are the gates, see webserver.cpp's header). Those three
     // columns are left as inert leftovers on any DB that already has them (SQLite on this
     // build has no reliable DROP COLUMN, see the items.upc comment below for the same
     // reasoning) rather than migrated -- nothing reads or writes them anymore.
@@ -320,7 +321,16 @@ bool db_config_set(const char *key, const char *value) {
 // addresses the same physical FAT root directly (confirmed by SD Info's own file listing,
 // which shows "pos.db" with no "/sd/" prefix using this same SD.h API).
 #define DB_PATH_SD      "/pos.db"
-#define DB_BACKUP_PATH  "/pos_backup.db"
+#define DB_JOURNAL_SD   "/pos.db-journal"
+#define BACKUP_TMP      "/pos_backup.tmp"
+#define RESTORE_TMP     "/pos_restore.tmp"
+#define BACKUP_SLOTS    5
+
+// Slot 0 keeps the original single-backup name, so Download database and existing cards
+// carry straight over.
+static const char *BACKUP_PATHS[BACKUP_SLOTS] = {
+    "/pos_backup.db", "/pos_backup1.db", "/pos_backup2.db", "/pos_backup3.db", "/pos_backup4.db",
+};
 
 // Copies one file on the SD card byte-for-byte, overwriting any existing destination.
 static bool copy_file(const char *src, const char *dst) {
@@ -346,35 +356,286 @@ static bool copy_file(const char *src, const char *dst) {
     return ok;
 }
 
-// Copies the live DB to the backup file.
-bool db_backup_now() {
-    bool ok = copy_file(DB_PATH_SD, DB_BACKUP_PATH);
-    Serial.printf("[DB] backup %s\n", ok ? "OK" : "FAILED");
-    return ok;
+// True if both files exist and match byte-for-byte -- reads the copy back off the card,
+// so a write the card silently dropped or mangled shows up here, not at restore time.
+static bool files_equal(const char *a, const char *b) {
+    File fa = SD.open(a, FILE_READ);
+    File fb = SD.open(b, FILE_READ);
+    bool same = fa && fb && fa.size() == fb.size();
+    uint8_t ba[512], bb[512];
+    while (same) {
+        int na = fa.read(ba, sizeof(ba));
+        int nb = fb.read(bb, sizeof(bb));
+        if (na != nb) { same = false; break; }
+        if (na <= 0) break;
+        if (memcmp(ba, bb, na) != 0) same = false;
+    }
+    if (fa) fa.close();
+    if (fb) fb.close();
+    return same;
 }
 
-// Copies the backup file over the live DB, if a backup exists.
-bool db_restore_from_backup() {
-    if (!SD.exists(DB_BACKUP_PATH)) {
-        Serial.println("[DB] no backup file present, nothing to restore from");
+// Copies src to dst through a temp file: copy, compare, and only then replace dst. dst is
+// never left half-written -- a failure anywhere before the final swap leaves it as it was.
+static bool copy_verified(const char *src, const char *tmp, const char *dst) {
+    if (!copy_file(src, tmp) || !files_equal(src, tmp)) {
+        SD.remove(tmp);
         return false;
     }
-    bool ok = copy_file(DB_BACKUP_PATH, DB_PATH_SD);
-    Serial.printf("[DB] restore from backup %s\n", ok ? "OK" : "FAILED");
+    SD.remove(dst);
+    return SD.rename(tmp, dst);
+}
+
+// Steps through every row of one query, touching every column -- column_bytes() makes
+// SQLite load the full value, including any overflow pages. False on any read error.
+static bool read_all_rows(sqlite3 *db, const char *sql) {
+    sqlite3_stmt *stmt;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return false;
+    int rc;
+    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+        int cols = sqlite3_column_count(stmt);
+        for (int c = 0; c < cols; c++) sqlite3_column_bytes(stmt, c);
+    }
+    sqlite3_finalize(stmt);
+    return rc == SQLITE_DONE;
+}
+
+// The deep check behind db_sanity_check(), on any open handle (the live DB or a backup
+// opened read-only). See db.h for why it reads everything instead of using a PRAGMA.
+static bool deep_check(sqlite3 *db) {
+    if (!db) return false;
+
+    // Gather every table and index name first, then read each one.
+    struct Obj { char type; char name[48]; char tbl[48]; };
+    static Obj objs[32];
+    int n = 0;
+    sqlite3_stmt *stmt;
+    if (sqlite3_prepare_v2(db, "SELECT type, name, tbl_name FROM sqlite_master WHERE type IN ('table','index');",
+                           -1, &stmt, nullptr) != SQLITE_OK) return false;
+    int rc;
+    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+        const char *ty = (const char *)sqlite3_column_text(stmt, 0);
+        const char *nm = (const char *)sqlite3_column_text(stmt, 1);
+        const char *tb = (const char *)sqlite3_column_text(stmt, 2);
+        if (!ty || !nm || !tb || n >= 32) continue;
+        objs[n].type = ty[0];
+        snprintf(objs[n].name, sizeof(objs[n].name), "%s", nm);
+        snprintf(objs[n].tbl, sizeof(objs[n].tbl), "%s", tb);
+        n++;
+    }
+    sqlite3_finalize(stmt);
+    if (rc != SQLITE_DONE) {
+        Serial.printf("[DB] deep check: reading the schema failed: %s\n", sqlite3_errmsg(db));
+        return false;
+    }
+
+    // The cart can't run without these -- a file missing any of them isn't a usable DB.
+    static const char *REQUIRED[] = { "users", "items", "item_upcs", "checkouts",
+                                      "checkout_items", "config", "payment_methods" };
+    for (const char *req : REQUIRED) {
+        bool found = false;
+        for (int i = 0; i < n && !found; i++) found = objs[i].type == 't' && strcmp(objs[i].name, req) == 0;
+        if (!found) {
+            Serial.printf("[DB] deep check: table %s missing\n", req);
+            return false;
+        }
+    }
+
+    char sql[200];
+    for (int i = 0; i < n; i++) {
+        if (objs[i].type == 't') {
+            snprintf(sql, sizeof(sql), "SELECT * FROM \"%s\";", objs[i].name);
+            if (!read_all_rows(db, sql)) {
+                Serial.printf("[DB] deep check: reading table %s failed: %s\n", objs[i].name, sqlite3_errmsg(db));
+                return false;
+            }
+            continue;
+        }
+        // Index: walk it in order on its first column, which reads the index's own pages
+        // (a table scan never touches them). If this build won't report the column or plan
+        // the query, skip that index rather than fail a healthy DB -- only a read error counts.
+        char col[48] = "";
+        snprintf(sql, sizeof(sql), "PRAGMA index_info(\"%s\");", objs[i].name);
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+            if (sqlite3_step(stmt) == SQLITE_ROW) {
+                const char *c = (const char *)sqlite3_column_text(stmt, 2);
+                if (c) snprintf(col, sizeof(col), "%s", c);
+            }
+            sqlite3_finalize(stmt);
+        }
+        if (!col[0]) continue;
+        snprintf(sql, sizeof(sql), "SELECT \"%s\" FROM \"%s\" INDEXED BY \"%s\" ORDER BY \"%s\";",
+                 col, objs[i].tbl, objs[i].name, col);
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) continue;
+        while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {}
+        sqlite3_finalize(stmt);
+        if (rc != SQLITE_DONE) {
+            Serial.printf("[DB] deep check: reading index %s failed: %s\n", objs[i].name, sqlite3_errmsg(db));
+            return false;
+        }
+    }
+    return true;
+}
+
+// Verified copy of the live DB into slot 0, rotating the older copies down one slot.
+bool db_backup_now() {
+    // Never back up a DB that fails the deep check -- that's what keeps damage from
+    // rotating into (and eventually through) every copy. The existing copies stay as-is.
+    if (!deep_check(_db)) {
+        Serial.println("[DB] backup SKIPPED -- live DB failed the deep check, existing copies kept");
+        return false;
+    }
+    // Copy + compare into a temp file before touching any slot.
+    if (!copy_file(DB_PATH_SD, BACKUP_TMP) || !files_equal(DB_PATH_SD, BACKUP_TMP)) {
+        SD.remove(BACKUP_TMP);
+        Serial.println("[DB] backup FAILED -- copy didn't verify, existing copies kept");
+        return false;
+    }
+    SD.remove(BACKUP_PATHS[BACKUP_SLOTS - 1]);
+    for (int i = BACKUP_SLOTS - 2; i >= 0; i--) {
+        if (SD.exists(BACKUP_PATHS[i])) SD.rename(BACKUP_PATHS[i], BACKUP_PATHS[i + 1]);
+    }
+    bool ok = SD.rename(BACKUP_TMP, BACKUP_PATHS[0]);
+    Serial.printf("[DB] backup %s\n", ok ? "OK (verified)" : "FAILED at final rename");
     return ok;
 }
 
-// Runs a quick, proven-primitive query to confirm the schema is actually queryable.
-bool db_sanity_check() {
-    if (!_db) return false;
+// Newest backup slot that opens read-only and passes the deep check (plus holds an admin
+// row, if need_admin), or -1 if none does.
+int db_find_good_backup(bool need_admin) {
+    sqlite3_initialize();  // idempotent; boot may get here before db_init() ever succeeded
+    for (int i = 0; i < BACKUP_SLOTS; i++) {
+        if (!SD.exists(BACKUP_PATHS[i])) continue;
 
+        char vfs_path[32];
+        snprintf(vfs_path, sizeof(vfs_path), "/sd%s", BACKUP_PATHS[i]);
+        sqlite3 *bak = nullptr;
+        bool good = false;
+        if (sqlite3_open_v2(vfs_path, &bak, SQLITE_OPEN_READONLY, nullptr) == SQLITE_OK && deep_check(bak)) {
+            good = true;
+            if (need_admin) {
+                sqlite3_stmt *stmt;
+                good = false;
+                if (sqlite3_prepare_v2(bak, "SELECT 1 FROM users WHERE admin = 1 LIMIT 1;", -1, &stmt, nullptr) == SQLITE_OK) {
+                    good = sqlite3_step(stmt) == SQLITE_ROW;
+                    sqlite3_finalize(stmt);
+                }
+            }
+        }
+        if (bak) sqlite3_close(bak);
+        Serial.printf("[DB] backup slot %d (%s): %s\n", i, BACKUP_PATHS[i], good ? "good" : "skipped");
+        if (good) return i;
+    }
+    return -1;
+}
+
+// Verified copy of one backup slot over the live DB. The DB handle must be closed.
+bool db_restore_backup_slot(int slot) {
+    if (slot < 0 || slot >= BACKUP_SLOTS || !SD.exists(BACKUP_PATHS[slot])) return false;
+    // A journal left by the old pos.db belongs to that file, not this one -- if it were
+    // replayed onto the restored copy it would corrupt it.
+    SD.remove(DB_JOURNAL_SD);
+    bool ok = copy_verified(BACKUP_PATHS[slot], RESTORE_TMP, DB_PATH_SD);
+    Serial.printf("[DB] restore from slot %d (%s) %s\n", slot, BACKUP_PATHS[slot], ok ? "OK (verified)" : "FAILED");
+    return ok;
+}
+
+// Restores the newest backup that passes the deep check.
+bool db_restore_from_backup() {
+    int slot = db_find_good_backup(false);
+    if (slot < 0) {
+        Serial.println("[DB] no backup passed the deep check, nothing to restore from");
+        return false;
+    }
+    return db_restore_backup_slot(slot);
+}
+
+// Runs the deep check on the live DB.
+bool db_sanity_check() {
+    return deep_check(_db);
+}
+
+// Runs one COUNT(*) query, or -1 if it couldn't run.
+static int count_rows(const char *sql) {
     sqlite3_stmt *stmt;
-    bool ok = false;
-    if (sqlite3_prepare_v2(_db, "SELECT COUNT(*) FROM users;", -1, &stmt, nullptr) == SQLITE_OK) {
-        ok = sqlite3_step(stmt) == SQLITE_ROW;
+    int n = -1;
+    if (sqlite3_prepare_v2(_db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        if (sqlite3_step(stmt) == SQLITE_ROW) n = sqlite3_column_int(stmt, 0);
         sqlite3_finalize(stmt);
     }
-    return ok;
+    return n;
+}
+
+// See db.h. Each rule is one COUNT(*) of offending rows.
+int db_consistency_check(char *summary, size_t summary_len) {
+    struct Rule { const char *name; const char *sql; };
+    static const Rule RULES[] = {
+        { "empty_sales",
+          "SELECT COUNT(*) FROM checkouts c WHERE NOT EXISTS "
+          "(SELECT 1 FROM checkout_items ci WHERE ci.checkout_id = c.id);" },
+        { "orphan_lines",
+          "SELECT COUNT(*) FROM checkout_items ci WHERE NOT EXISTS "
+          "(SELECT 1 FROM checkouts c WHERE c.id = ci.checkout_id);" },
+        { "lines_missing_item",
+          "SELECT COUNT(*) FROM checkout_items ci WHERE NOT EXISTS "
+          "(SELECT 1 FROM items i WHERE i.id = ci.item_id);" },
+        { "barcodes_missing_item",
+          "SELECT COUNT(*) FROM item_upcs u WHERE NOT EXISTS "
+          "(SELECT 1 FROM items i WHERE i.id = u.item_id);" },
+        { "sales_missing_user",
+          "SELECT COUNT(*) FROM checkouts c WHERE NOT EXISTS "
+          "(SELECT 1 FROM users u WHERE u.id = c.user_id);" },
+        { "negative_prices",
+          "SELECT COUNT(*) FROM items WHERE price_cents < 0;" },
+    };
+
+    summary[0] = '\0';
+    if (!_db) {
+        snprintf(summary, summary_len, "no_db");
+        return 1;
+    }
+    int problems = 0;
+
+    // total_mismatch, done in C: this build refuses a correlated scalar subquery like
+    // "WHERE total <> (SELECT SUM(...) WHERE checkout_id = c.id)" at prepare time (found
+    // 2026-10-02 on the real card -- 4th silently-unsupported feature, see
+    // feedback-no-upsert-syntax). LEFT JOIN + GROUP BY is the shape the web Report page
+    // already runs on hardware.
+    {
+        sqlite3_stmt *stmt;
+        int mismatched = -1;
+        if (sqlite3_prepare_v2(_db,
+                "SELECT c.total_price_cents, COALESCE(SUM(ci.price_cents * ci.quantity), 0) "
+                "FROM checkouts c LEFT JOIN checkout_items ci ON ci.checkout_id = c.id GROUP BY c.id;",
+                -1, &stmt, nullptr) == SQLITE_OK) {
+            mismatched = 0;
+            int rc;
+            while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+                if (sqlite3_column_int(stmt, 0) != sqlite3_column_int(stmt, 1)) mismatched++;
+            }
+            if (rc != SQLITE_DONE) mismatched = -1;
+            sqlite3_finalize(stmt);
+        }
+        if (mismatched < 0) Serial.printf("[DB] consistency total_mismatch failed: %s\n", sqlite3_errmsg(_db));
+        if (mismatched != 0) {
+            problems++;
+            if (mismatched < 0) snprintf(summary, summary_len, "total_mismatch=query_failed");
+            else                snprintf(summary, summary_len, "total_mismatch=%d", mismatched);
+        }
+    }
+
+    for (const Rule &r : RULES) {
+        int n = count_rows(r.sql);
+        if (n < 0) Serial.printf("[DB] consistency %s failed: %s\n", r.name, sqlite3_errmsg(_db));
+        if (n == 0) continue;
+        problems++;
+        size_t len = strlen(summary);
+        if (n < 0) snprintf(summary + len, summary_len - len, "%s%s=query_failed", len ? "," : "", r.name);
+        else       snprintf(summary + len, summary_len - len, "%s%s=%d", len ? "," : "", r.name, n);
+    }
+    if (problems == 0) snprintf(summary, summary_len, "ok");
+    Serial.printf("[DB] consistency check: %s\n", summary);
+    return problems;
 }
 
 // ── SD-layer check ───────────────────────────────────────────────────────────
@@ -403,4 +664,19 @@ bool sd_write_read_test() {
     SD.remove(SD_TEST_PATH);  // don't leave the throwaway file sitting on the card
 
     return read == strlen(SD_TEST_PAYLOAD) && strcmp(buf, SD_TEST_PAYLOAD) == 0;
+}
+
+// ── boot cleanup ─────────────────────────────────────────────────────────────
+
+// Removes leftover scratch files (see db.h). Safe at boot only -- nothing is mid-use yet.
+int sd_cleanup_temp_files() {
+    static const char *TEMP_FILES[] = { BACKUP_TMP, RESTORE_TMP, SD_TEST_PATH, REPORT_TMP_PATH };
+    int removed = 0;
+    for (const char *path : TEMP_FILES) {
+        if (SD.exists(path) && SD.remove(path)) {
+            Serial.printf("[SD] removed leftover %s\n", path);
+            removed++;
+        }
+    }
+    return removed;
 }

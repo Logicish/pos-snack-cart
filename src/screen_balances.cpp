@@ -235,6 +235,7 @@ void screen_balances_push() {
         lv_obj_set_style_bg_opa(_list, LV_OPA_TRANSP, LV_PART_MAIN);
         lv_obj_set_style_border_width(_list, 0, LV_PART_MAIN);
         lv_obj_set_style_pad_all(_list, 8, LV_PART_MAIN);
+        lv_obj_set_style_pad_hor(_list, 12, LV_PART_MAIN);  // 12px side inset, same as every screen
         lv_obj_set_style_pad_row(_list, 6, LV_PART_MAIN);
         lv_obj_set_layout(_list, LV_LAYOUT_FLEX);
         lv_obj_set_flex_flow(_list, LV_FLEX_FLOW_COLUMN);

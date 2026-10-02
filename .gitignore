@@ -34,3 +34,7 @@ db_backups/
 # the shipped boards live in tools/slidefree/ and ARE committed
 tools/puzzles*.json
 __pycache__/
+
+# Shelved CYOA engine + Hospital Town Games outline -- pulled from the launch build
+# 2026-10-02, kept locally for post-launch work
+cyoa_shelved/
