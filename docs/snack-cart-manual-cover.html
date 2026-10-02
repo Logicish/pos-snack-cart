@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Snack Cart Manual Cover</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@75..100,500..800&family=IBM+Plex+Sans:wght@400;600&family=IBM+Plex+Mono:wght@400;600&display=swap">
+<style>
+/* Cover for the printed manual: one US Letter page, white ground (home-printer friendly),
+   same type and colours as the manual. Everything sits inside a 0.75in safe margin.
+   The drawing is the real front panel, proportions taken from a photo of the finished cart. */
+:root {
+  --ink: #17201f;
+  --muted: #5b6766;
+  --rule: #d9dfde;
+  --accent: #00838f;
+  --panel: #3b3e42;
+  --key-yellow: #f5d90a;
+  --key-green: #35b54a;
+  --key-red: #e2402f;
+  --screen: #121212;
+  --screen-cyan: #00bcd4;
+  --font-display: "Archivo", "Arial Narrow", "Helvetica Neue", Arial, sans-serif;
+  --font-body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+  color-scheme: light;
+}
+@page { size: letter; margin: 0; }
+html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+* { box-sizing: border-box; }
+body { margin: 0; background: #fff; color: var(--ink); font-family: var(--font-body); }
+
+.page {
+  width: 8.5in; height: 11in; padding: 0.75in;
+  display: grid; grid-template-rows: auto 1fr auto; gap: 0.3in;
+  overflow: hidden;
+}
+
+.top { display: flex; justify-content: space-between; align-items: baseline;
+       border-bottom: 2px solid var(--ink); padding-bottom: 10pt;
+       font: 600 9pt/1 var(--font-mono); letter-spacing: .14em; text-transform: uppercase; }
+.top .accent { color: var(--accent); }
+
+/* middle: title, then the panel drawing full width beneath it */
+.middle { display: flex; flex-direction: column; justify-content: center; gap: 0.42in; }
+.title-row { display: grid; grid-template-columns: 1fr auto; align-items: end; gap: 0.3in; }
+.eyebrow { font: 600 11pt/1 var(--font-mono); letter-spacing: .16em; text-transform: uppercase; color: var(--accent); }
+h1 { font: 800 96pt/0.86 var(--font-display); font-stretch: 76%; letter-spacing: -.01em; margin: 12pt 0 0; }
+.side { max-width: 3.1in; padding-bottom: 6pt; }
+.subtitle { font: 700 19pt/1.15 var(--font-display); font-stretch: 88%; margin: 0 0 10pt; }
+.desc { font-size: 11pt; line-height: 1.5; color: var(--muted); margin: 0; }
+
+.drawing { display: flex; justify-content: center; }
+.drawing svg { width: 5.6in; height: auto; display: block; }
+
+.bottom { display: grid; grid-template-columns: 1fr auto; align-items: end; gap: 12pt;
+          border-top: 1px solid var(--rule); padding-top: 12pt; }
+.contents { font: 9pt/1.7 var(--font-mono); color: var(--muted); columns: 3; column-gap: 18pt; }
+.contents b { color: var(--accent); font-weight: 600; margin-right: 6pt; }
+.maker { text-align: right; font: 600 9pt/1.5 var(--font-mono); letter-spacing: .08em; text-transform: uppercase; }
+.maker span { display: block; color: var(--muted); font-weight: 400; letter-spacing: .04em; text-transform: none; }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="top">
+    <span>Owner &amp; admin manual</span>
+    <span class="accent">Launch edition · October 2026</span>
+  </div>
+
+  <div class="middle">
+    <div class="title-row">
+      <div>
+        <div class="eyebrow">Point-of-sale terminal</div>
+        <h1>Snack<br>Cart</h1>
+      </div>
+      <div class="side">
+        <p class="subtitle">Setup, operation, care &amp; specifications</p>
+        <p class="desc">Badge in, scan snacks, pay by Venmo, Zelle, or Cash App from a QR code on
+          the screen. Everything you need to run, look after, and repair the cart.</p>
+      </div>
+    </div>
+
+    <!-- Front panel, to the proportions of the finished cart: textured dark panel, six
+         screws (three top, three bottom), portrait screen on the left showing the real
+         Start screen, yellow D-pad in a diamond, green and red buttons below it, and the
+         SD card standing proud of the left edge. -->
+    <div class="drawing">
+      <svg viewBox="-12 -6 324 266" role="img" aria-label="Drawing of the snack cart's front panel: screen on the left, yellow direction buttons and green and red buttons on the right">
+        <defs>
+          <!-- fine speckle, like the texture spray on the real panel -->
+          <filter id="speckle" x="0" y="0" width="100%" height="100%">
+            <feTurbulence type="fractalNoise" baseFrequency="1.8" numOctaves="1" seed="7" result="n"/>
+            <feColorMatrix in="n" type="matrix"
+              values="0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 -2.2 1.25" result="dots"/>
+            <feComposite in="dots" in2="SourceGraphic" operator="in"/>
+          </filter>
+          <radialGradient id="cap" cx="40%" cy="35%" r="70%">
+            <stop offset="0" stop-color="#fff" stop-opacity=".35"/>
+            <stop offset="1" stop-color="#fff" stop-opacity="0"/>
+          </radialGradient>
+        </defs>
+
+        <!-- SD card, proud of the left edge -->
+        <rect x="-8" y="82" width="12" height="40" rx="1.5" fill="#9aa3a8" stroke="var(--ink)" stroke-width="1"/>
+
+        <!-- panel -->
+        <rect x="0" y="0" width="300" height="254" rx="5" fill="var(--panel)" stroke="var(--ink)" stroke-width="1.5"/>
+        <rect x="0" y="0" width="300" height="254" rx="5" fill="var(--panel)" filter="url(#speckle)" opacity=".5"/>
+
+        <!-- screws -->
+        <g fill="#1f2224" stroke="#6c7378" stroke-width=".8">
+          <circle cx="16" cy="9" r="3"/><circle cx="152" cy="9" r="3"/><circle cx="286" cy="9" r="3"/>
+          <circle cx="16" cy="245" r="3"/><circle cx="152" cy="245" r="3"/><circle cx="286" cy="245" r="3"/>
+        </g>
+
+        <!-- screen opening + screen (portrait 2:3) -->
+        <rect x="36" y="44" width="110" height="160" rx="1.5" fill="#1a1c1d"/>
+        <rect x="40" y="48" width="102" height="152" fill="var(--screen)"/>
+        <!-- on-screen: the real Start screen -->
+        <rect x="40" y="48" width="102" height="12" fill="#1e1e1e"/>
+        <text x="91" y="56.6" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="5.4" font-weight="600" fill="#efefef" letter-spacing=".6">START</text>
+        <text x="91" y="116" text-anchor="middle" font-family="Archivo, Arial Narrow, sans-serif" font-size="12.5" font-weight="700" fill="var(--screen-cyan)">Scan Badge</text>
+        <text x="91" y="131" text-anchor="middle" font-family="Archivo, Arial Narrow, sans-serif" font-size="12.5" font-weight="700" fill="var(--screen-cyan)">To Start</text>
+        <text x="44" y="184" font-family="IBM Plex Mono, monospace" font-size="4.6" fill="var(--key-yellow)">◀ Extras</text>
+        <text x="138" y="184" text-anchor="end" font-family="IBM Plex Mono, monospace" font-size="4.6" fill="var(--key-yellow)">Browse/Price ▶</text>
+        <text x="44" y="194" font-family="IBM Plex Mono, monospace" font-size="4.6" fill="var(--key-green)">Admin Login</text>
+        <text x="138" y="194" text-anchor="end" font-family="IBM Plex Mono, monospace" font-size="4.6" fill="var(--key-red)">Screen Saver</text>
+
+        <!-- buttons: recessed ring, coloured cap, soft highlight -->
+        <g stroke="#15181a" stroke-width="2.4">
+          <circle cx="216" cy="70"  r="13" fill="var(--key-yellow)"/>
+          <circle cx="190" cy="96"  r="13" fill="var(--key-yellow)"/>
+          <circle cx="242" cy="96"  r="13" fill="var(--key-yellow)"/>
+          <circle cx="216" cy="122" r="13" fill="var(--key-yellow)"/>
+          <circle cx="191" cy="165" r="13" fill="var(--key-green)"/>
+          <circle cx="244" cy="165" r="13" fill="var(--key-red)"/>
+        </g>
+        <g fill="url(#cap)">
+          <circle cx="216" cy="70" r="12"/><circle cx="190" cy="96" r="12"/><circle cx="242" cy="96" r="12"/>
+          <circle cx="216" cy="122" r="12"/><circle cx="191" cy="165" r="12"/><circle cx="244" cy="165" r="12"/>
+        </g>
+      </svg>
+    </div>
+  </div>
+
+  <div class="bottom">
+    <div class="contents">
+      <div><b>01</b>Overview</div><div><b>02</b>Controls</div><div><b>03</b>Buying snacks</div>
+      <div><b>04</b>Running the cart</div><div><b>05</b>Web portal</div><div><b>06</b>Care &amp; backups</div>
+      <div><b>07</b>Alerts &amp; boot log</div><div><b>08</b>Troubleshooting</div><div><b>09</b>Specifications</div>
+    </div>
+    <div class="maker">LogicishDesigns<span>Built in-house</span></div>
+  </div>
+</div>
+</body>
+</html>

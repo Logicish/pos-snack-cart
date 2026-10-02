@@ -1,0 +1,649 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Snack Cart Manual (print)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@75..100,500..800&family=IBM+Plex+Sans:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: a device manual — sticky contents rail beside one reading column; the cart's own
+   button colours (yellow D-pad, green Enter, red Back) reused as key-cap chips. */
+:root {
+  --bg: #f6f7f6;
+  --paper: #ffffff;
+  --ink: #17201f;
+  --muted: #5b6766;
+  --rule: #d9dfde;
+  --accent: #00838f;        /* the cart's cyan, deepened for light paper */
+  --accent-soft: #e3f3f4;
+  --key-yellow: #f5d90a;
+  --key-green: #3f9b44;
+  --key-red: #e2402f;
+  --key-ink: #17201f;
+  --warn: #b26a00;
+  --warn-soft: #fff4e0;
+  --bad: #c62828;
+  --code-bg: #eef1f0;
+  --font-display: "Archivo", "Arial Narrow", "Helvetica Neue", Arial, sans-serif;
+  --font-body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--ink);
+  font: 16px/1.6 var(--font-body);
+  padding-inline: 16px; padding-block: 0 64px;
+}
+.shell {
+  max-width: 1120px; margin: 0 auto;
+  display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 48px;
+}
+@media (max-width: 860px) { .shell { grid-template-columns: minmax(0, 1fr); gap: 0; } }
+
+/* contents rail */
+nav.toc { position: sticky; top: env(safe-area-inset-top, 0px); align-self: start; padding-top: 40px; }
+nav.toc .label { font: 600 12px/1 var(--font-mono); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+nav.toc ol { list-style: none; padding: 0; margin: 14px 0 0; display: grid; gap: 2px; counter-reset: toc; }
+nav.toc li { counter-increment: toc; }
+nav.toc a {
+  display: grid; grid-template-columns: 26px 1fr; padding: 5px 8px; border-radius: 6px;
+  color: var(--ink); text-decoration: none; font-size: 14.5px;
+}
+nav.toc a::before { content: counter(toc, decimal-leading-zero); font: 12px/1.9 var(--font-mono); color: var(--muted); }
+nav.toc a:hover, nav.toc a:focus-visible { background: var(--accent-soft); outline: none; }
+@media (max-width: 860px) {
+  nav.toc { position: static; padding-top: 24px; }
+  nav.toc ol { grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); }
+}
+
+main { min-width: 0; padding-top: 40px; }
+
+/* cover */
+header.cover { padding-bottom: 28px; border-bottom: 2px solid var(--ink); margin-bottom: 8px; }
+.eyebrow { font: 600 12px/1 var(--font-mono); letter-spacing: .14em; text-transform: uppercase; color: var(--accent); }
+h1 {
+  font: 800 clamp(40px, 7vw, 68px)/0.95 var(--font-display); font-stretch: 78%;
+  letter-spacing: -.01em; margin: 12px 0 14px; text-wrap: balance;
+}
+.lede { font-size: 18px; max-width: 62ch; color: var(--ink); margin: 0; }
+.facts { display: flex; flex-wrap: wrap; gap: 8px 22px; margin-top: 18px; font: 13px/1.4 var(--font-mono); color: var(--muted); }
+.facts b { color: var(--ink); font-weight: 600; }
+
+/* sections */
+section { padding-top: 40px; scroll-margin-top: 12px; }
+h2 {
+  display: flex; align-items: baseline; gap: 14px;
+  font: 750 30px/1.1 var(--font-display); font-stretch: 85%; margin: 0 0 6px; text-wrap: balance;
+}
+h2 .num { font: 600 14px/1 var(--font-mono); color: var(--accent); }
+h3 { font: 700 19px/1.25 var(--font-display); font-stretch: 92%; margin: 28px 0 8px; }
+p, li { max-width: 68ch; }
+p { margin: 10px 0; }
+ul, ol { padding-left: 22px; margin: 10px 0; }
+li { margin: 4px 0; }
+a { color: var(--accent); }
+code, .mono { font-family: var(--font-mono); font-size: .9em; }
+code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
+.sub { color: var(--muted); margin-top: 0; }
+
+/* key caps — the cart's physical buttons */
+.key {
+  display: inline-flex; align-items: center; justify-content: center; min-width: 1.9em;
+  padding: 0 .45em; height: 1.55em; border-radius: 5px; vertical-align: .05em;
+  font: 600 .78em/1 var(--font-mono); letter-spacing: .02em; color: var(--key-ink);
+  box-shadow: inset 0 -2px 0 rgba(0,0,0,.22);
+}
+.k-dir { background: var(--key-yellow); }
+.k-enter { background: var(--key-green); color: #fff; }
+.k-back { background: var(--key-red); color: #fff; }
+
+/* d-pad figure */
+.controls { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 28px; align-items: center; margin: 18px 0; }
+@media (max-width: 560px) { .controls { grid-template-columns: minmax(0, 1fr); } }
+.pad { display: grid; grid-template-columns: repeat(3, 52px); grid-template-rows: repeat(3, 52px); gap: 6px; }
+.pad .key { width: 52px; height: 52px; font-size: 13px; border-radius: 10px; }
+.pad .up { grid-area: 1 / 2; } .pad .left { grid-area: 2 / 1; } .pad .right { grid-area: 2 / 3; } .pad .down { grid-area: 3 / 2; }
+.pad-side { display: grid; gap: 8px; }
+.pad-side .key { width: 112px; height: 44px; font-size: 13px; border-radius: 10px; }
+.figure { display: flex; gap: 22px; flex-wrap: wrap; align-items: center; padding: 18px; background: var(--paper); border: 1px solid var(--rule); border-radius: 10px; }
+
+/* step lists — real sequences */
+ol.steps { list-style: none; padding: 0; counter-reset: s; display: grid; gap: 10px; }
+ol.steps > li { counter-increment: s; display: grid; grid-template-columns: 30px minmax(0, 1fr); gap: 10px; margin: 0; }
+ol.steps > li::before {
+  content: counter(s); display: grid; place-items: center; width: 26px; height: 26px; border-radius: 50%;
+  border: 1.5px solid var(--accent); color: var(--accent); font: 600 13px/1 var(--font-mono);
+}
+
+/* tables */
+.table-wrap { overflow-x: auto; margin: 14px 0; border: 1px solid var(--rule); border-radius: 10px; background: var(--paper); }
+table { border-collapse: collapse; width: 100%; font-size: 14.5px; }
+th, td { text-align: left; padding: 9px 14px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+tr:last-child td { border-bottom: 0; }
+th { font: 600 12px/1.3 var(--font-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); background: var(--bg); }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+td .mono { white-space: nowrap; }
+.alert-msg { font: 600 12.5px/1.4 var(--font-mono); letter-spacing: .02em; color: var(--warn); }
+.alert-msg.bad { color: var(--bad); }
+
+/* callouts */
+.note {
+  border-left: 3px solid var(--accent); background: var(--accent-soft);
+  padding: 10px 14px; border-radius: 0 8px 8px 0; margin: 14px 0; max-width: 72ch;
+}
+.note.warn { border-color: var(--warn); background: var(--warn-soft); }
+.note p { margin: 4px 0; }
+
+/* screen map */
+.map { font: 14px/1.75 var(--font-mono); background: var(--paper); border: 1px solid var(--rule); border-radius: 10px; padding: 16px 18px; overflow-x: auto; white-space: pre; }
+.map .h { color: var(--accent); font-weight: 600; }
+.map .d { color: var(--muted); }
+
+details { margin: 14px 0; border: 1px solid var(--rule); border-radius: 10px; background: var(--paper); }
+details > summary { cursor: pointer; padding: 12px 16px; font-weight: 600; }
+details > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 10px; }
+details[open] > summary { border-bottom: 1px solid var(--rule); }
+details .table-wrap { border: 0; border-radius: 0; margin: 0; }
+
+footer.colophon { margin-top: 56px; padding-top: 16px; border-top: 1px solid var(--rule); font: 13px/1.6 var(--font-mono); color: var(--muted); }
+
+@media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
+</style>
+<style>
+/* Print edition: US Letter, light, each section on its own page, page numbers in the footer. */
+@page {
+  size: letter;
+  margin: 0.6in 0.65in 0.7in;
+  @bottom-left  { content: "Snack Cart Manual"; font: 8pt "IBM Plex Mono", monospace; color: #5b6766; }
+  @bottom-right { content: "Page " counter(page) " of " counter(pages); font: 8pt "IBM Plex Mono", monospace; color: #5b6766; }
+}
+html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+body { background: #fff; font-size: 10pt; line-height: 1.42; padding: 0; }
+.shell { display: block; max-width: none; }
+main { padding-top: 0; }
+
+/* Contents becomes a printed list on the cover page, under the title. */
+.shell { display: flex; flex-direction: column; }
+main { order: 1; }
+nav.toc { order: 0; display: none; }
+.print-toc { margin: 18pt 0 0; padding: 12pt 14pt; border: 1px solid var(--rule); border-radius: 8px; }
+.print-toc .label { font: 600 8pt/1 var(--font-mono); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+.print-toc ol { columns: 3; column-gap: 18pt; margin: 8pt 0 0; padding-left: 18pt; font-size: 10pt; }
+.print-toc li { margin: 2pt 0; }
+.print-toc a { color: var(--ink); text-decoration: none; }
+
+h1 { font-size: 38pt; margin: 6pt 0 8pt; }
+.lede { font-size: 11pt; }
+header.cover { padding-bottom: 14pt; }
+.facts { margin-top: 10pt; }
+section { padding-top: 22pt; break-before: auto; }
+#admin, #care, #alerts, #specs { break-before: page; padding-top: 0; }
+ol.steps { break-inside: avoid; }
+h2 { font-size: 21pt; margin-bottom: 4pt; }
+h3 { font-size: 12.5pt; margin: 12pt 0 4pt; }
+p { margin: 6pt 0; }
+ul, ol { margin: 6pt 0; }
+li { margin: 2pt 0; }
+.table-wrap { margin: 8pt 0; }
+ol.steps { gap: 6pt; }
+.note { margin: 8pt 0; padding: 6pt 10pt; }
+h2, h3, h2 + .sub { break-after: avoid; }
+p, li { max-width: none; orphans: 3; widows: 3; }
+
+.table-wrap { overflow: visible; }
+table { font-size: 9.5pt; }
+th, td { padding: 4pt 8pt; }
+tr, .note, .figure, .map, ol.steps > li, details { break-inside: avoid; }
+.map { font-size: 9pt; line-height: 1.6; white-space: pre; overflow: visible; }
+details > summary { list-style: none; }
+details > summary::-webkit-details-marker { display: none; }
+
+/* Key caps keep their colours, plus an outline so they still read in black and white. */
+.key { border: 1px solid #17201f; box-shadow: none; }
+.figure { gap: 16pt; padding: 12pt; }
+.pad { grid-template-columns: repeat(3, 40px); grid-template-rows: repeat(3, 40px); gap: 5px; }
+.pad .key { width: 40px; height: 40px; }
+.pad-side .key { width: 90px; height: 36px; }
+
+a { color: inherit; text-decoration: none; }
+footer.colophon { margin-top: 24pt; }
+</style>
+
+
+<div class="shell">
+  <nav class="toc" aria-label="Contents">
+    <div class="label">Contents</div>
+    <ol>
+      <li><a href="#overview">Overview</a></li>
+      <li><a href="#controls">Controls</a></li>
+      <li><a href="#buying">Buying snacks</a></li>
+      <li><a href="#admin">Running the cart</a></li>
+      <li><a href="#portal">Web portal</a></li>
+      <li><a href="#care">Care &amp; backups</a></li>
+      <li><a href="#alerts">Alerts &amp; boot log</a></li>
+      <li><a href="#trouble">Troubleshooting</a></li>
+      <li><a href="#specs">Specifications</a></li>
+    </ol>
+  </nav>
+
+  <main>
+    <header class="cover">
+      <div class="eyebrow">Owner &amp; admin manual</div>
+      <h1>Snack Cart</h1>
+      <p class="lede">A self-contained point-of-sale terminal for a workplace snack cart. People scan their
+        badge, scan their snacks, and pay the cart's owner by Venmo, Zelle, or Cash App from a QR code on
+        the screen. Everything is stored on the SD card inside; nothing goes to the internet.</p>
+      <div class="facts">
+        <span><b>Firmware</b> launch build, Oct 2026</span>
+        <span><b>Screen</b> 3.5&Prime; portrait</span>
+        <span><b>Input</b> 6 buttons + barcode scanner</span>
+        <span><b>Power</b> 5 V USB</span>
+      </div>
+
+    <div class="print-toc">
+      <div class="label">Contents</div>
+      <ol>
+        <li><a href="#overview">Overview</a></li>
+        <li><a href="#controls">Controls</a></li>
+        <li><a href="#buying">Buying snacks</a></li>
+        <li><a href="#admin">Running the cart</a></li>
+        <li><a href="#portal">Web portal</a></li>
+        <li><a href="#care">Care &amp; backups</a></li>
+        <li><a href="#alerts">Alerts &amp; boot log</a></li>
+        <li><a href="#trouble">Troubleshooting</a></li>
+        <li><a href="#specs">Specifications</a></li>
+      </ol>
+    </div>
+    </header>
+
+    <!-- 01 -->
+    <section id="overview">
+      <h2><span class="num">01</span>Overview</h2>
+      <p>The cart runs on trust. There is no cash drawer and no card reader: each purchase is recorded
+        against the buyer's badge as an unpaid transaction, and the buyer pays from their own phone. An
+        admin marks transactions paid once the money arrives.</p>
+      <h3>What's on the cart</h3>
+      <ul>
+        <li><b>Screen</b> on the top panel, on the left.</li>
+        <li><b>Six buttons</b> on the top panel, to the right of the screen: four yellow direction buttons
+          in a diamond, with green (Enter) and red (Back) below them.</li>
+        <li><b>Barcode scanner</b> on the front face. It reads both employee badges and product barcodes,
+          and beeps on every good read.</li>
+        <li><b>Power switch</b>, and a USB power cable from a wall adapter.</li>
+        <li><b>SD card slot</b>, reachable through a cutout in the side of the case. All data lives on this card.</li>
+      </ul>
+      <h3>Who does what</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Role</th><th>Can do</th></tr></thead>
+        <tr><td>Anyone</td><td>Check prices, browse the catalog.</td></tr>
+        <tr><td>Enrolled person</td><td>Buy snacks, see their own unpaid transactions, play the Extras games.</td></tr>
+        <tr><td>Admin</td><td>Everything above, plus clear balances, manage items and people, change settings, and open the web portal.</td></tr>
+      </table></div>
+    </section>
+
+    <!-- 02 -->
+    <section id="controls">
+      <h2><span class="num">02</span>Controls</h2>
+      <p class="sub">The bottom of every screen spells out what each button does right now, in that button's colour.</p>
+      <div class="figure">
+        <div class="pad" aria-hidden="true">
+          <span class="key k-dir up">&#9650;</span><span class="key k-dir left">&#9664;</span>
+          <span class="key k-dir right">&#9654;</span><span class="key k-dir down">&#9660;</span>
+        </div>
+        <div class="pad-side" aria-hidden="true">
+          <span class="key k-enter">ENTER</span><span class="key k-back">BACK</span>
+        </div>
+        <div style="min-width:0;flex:1 1 260px">
+          <p><span class="key k-dir">&#9650;</span> <span class="key k-dir">&#9660;</span> move the highlight in a list.</p>
+          <p><span class="key k-dir">&#9664;</span> <span class="key k-dir">&#9654;</span> jump a page at a time in long lists, or do the job named in the footer.</p>
+          <p><span class="key k-enter">ENTER</span> opens, selects, or confirms.</p>
+          <p><span class="key k-back">BACK</span> goes up one level, cancels, or says No.</p>
+        </div>
+      </div>
+      <ul>
+        <li>Holding a button repeats it, which is handy on long lists and the letter wheels.</li>
+        <li>Text (names, the WiFi password) is entered on a <b>letter wheel</b>: <span class="key k-dir">&#9650;</span><span class="key k-dir">&#9660;</span> change the letter, <span class="key k-dir">&#9664;</span><span class="key k-dir">&#9654;</span> move between positions, <span class="key k-enter">ENTER</span> continues.</li>
+        <li>Anything that deletes or clears asks you to confirm first.</li>
+      </ul>
+    </section>
+
+    <!-- 03 -->
+    <section id="buying">
+      <h2><span class="num">03</span>Buying snacks</h2>
+      <p class="sub">The everyday flow. The Start screen reads “Scan Badge To Start.”</p>
+
+      <h3>Make a purchase</h3>
+      <ol class="steps">
+        <li><div><b>Scan your badge.</b> Your transaction opens with your name in the header.</div></li>
+        <li><div><b>Scan each snack.</b> Scanning the same item twice adds a second one. For an item with no
+          barcode, press <span class="key k-dir">&#9654;</span> <b>Item Lookup</b> and pick it from the list.</div></li>
+        <li><div><b>Fix mistakes</b> by highlighting a line with <span class="key k-dir">&#9650;</span><span class="key k-dir">&#9660;</span>
+          and pressing <span class="key k-dir">&#9664;</span> <b>Delete Item</b> (removes one at a time).</div></li>
+        <li><div><b>Press <span class="key k-enter">ENTER</span> Pay.</b> The Payment screen shows the total and a QR
+          code. Press <span class="key k-dir">&#9654;</span> <b>Other Payment</b> to switch method.</div></li>
+        <li><div><b>Pay from your phone</b> (see below), then press <span class="key k-enter">ENTER</span>
+          <b>Confirm</b>. The sale is saved and the cart returns to Start.</div></li>
+      </ol>
+      <p><span class="key k-back">BACK</span> on the cart or Payment screen cancels the whole transaction
+        (it asks first on the cart screen). Nothing is saved until Confirm.</p>
+
+      <h3>Paying with the QR code</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Method</th><th>Scan with</th><th>Amount</th></tr></thead>
+        <tr><td>Venmo</td><td>Your phone's <b>Camera app</b>, not Venmo's own scanner</td><td>Filled in, with the transaction number in the note (<code>#12 Snacks!!</code>)</td></tr>
+        <tr><td>Cash App</td><td>Your phone's Camera app</td><td>Filled in</td></tr>
+        <tr><td>Zelle</td><td>Your <b>bank app's Zelle scanner</b>, not the Camera app</td><td>Type it yourself (Zelle can't prefill)</td></tr>
+      </table></div>
+      <p>Only the methods the owner has set up appear on the Payment screen.</p>
+
+      <h3>New here?</h3>
+      <p>When <b>Auto Enroll</b> is on, scanning an unknown badge asks “Badge not found. Enroll new user?”
+        Press <span class="key k-enter">ENTER</span> Yes, spell your first and last name on the letter wheel,
+        then scan your badge once more to confirm. Your first transaction opens right away. If Auto Enroll is
+        off, an admin adds you (Admin&nbsp;Menu → Users → Add User).</p>
+
+      <h3>From the Start screen</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Press</th><th>Opens</th></tr></thead>
+        <tr><td><span class="key k-dir">&#9654;</span></td><td><b>Browse/Price</b>: the full price list; scan any item to see its price. Nothing is charged.</td></tr>
+        <tr><td><span class="key k-dir">&#9664;</span></td><td><b>Extras</b>: scan your badge, then choose <b>Check Balance</b> (your own unpaid transactions, with the QR code again in case a payment didn't go through), <b>Laggy Fish</b>, or <b>Slide Free</b>. The games keep a best score per person.</td></tr>
+        <tr><td><span class="key k-enter">ENTER</span></td><td><b>Admin Login</b>: then scan an admin badge.</td></tr>
+        <tr><td><span class="key k-back">BACK</span></td><td><b>Screensaver</b>, right away.</td></tr>
+      </table></div>
+      <div class="note">
+        <p><b>Screensaver.</b> After a few idle minutes the screen dims and a fish wanders around. Press any
+          button to wake it. The scanner is switched off while it's showing, so wake the cart before
+          scanning.</p>
+      </div>
+      <div class="note">
+        <p><b>Auto logout.</b> A transaction or admin screen left alone returns to Start on its own after
+          5 minutes (adjustable). An unfinished transaction is discarded, not saved.</p>
+      </div>
+    </section>
+
+    <!-- 04 -->
+    <section id="admin">
+      <h2><span class="num">04</span>Running the cart</h2>
+      <p class="sub">Press <span class="key k-enter">ENTER</span> on Start, then scan an admin badge. An inactive or non-admin badge is turned away.</p>
+
+      <h3>Screen map</h3>
+<div class="map" role="img" aria-label="Map of every screen on the cart"><span class="h">Start</span>
+├─ scan a badge ............ Transaction → Payment
+├─ ◀ Extras ................ Check Balance · Laggy Fish · Slide Free
+├─ ▶ Browse/Price
+├─ BACK .................... Screensaver
+└─ ENTER Admin Login → <span class="h">Admin Menu</span>
+   ├─ Balances
+   ├─ Inventory ........... Restock · Add/Attach Item · Inventory
+   ├─ Users ............... Add User · Edit Users · Auto Enroll on/off
+   ├─ Web Portal
+   ├─ Settings
+   │  ├─ Payment Info ..... Venmo · Zelle · Cash App
+   │  ├─ Screensaver ...... Timeout · Dim
+   │  ├─ Set Clock
+   │  ├─ Display .......... Brightness
+   │  └─ Security ......... WiFi Password · Auto Logout
+   └─ Advanced Tools ...... SD Info · DB · Scanner · DS3231 Test · Boot Log
+<span class="d">BACK on the Admin Menu logs out.</span></div>
+
+      <h3>Balances: marking payments received</h3>
+      <p>One row per unpaid transaction, with its number, person, and amount. When the money arrives,
+        highlight the row and press <span class="key k-enter">ENTER</span> Clear, then
+        <span class="key k-enter">ENTER</span> Yes. Cleared transactions leave the list but stay in the
+        lifetime reports. Venmo payments carry the transaction number in their note; match Zelle and
+        Cash App payments by amount and time.</p>
+
+      <h3>Inventory</h3>
+      <ul>
+        <li><b>Restock</b>: scan an item, adjust its count, confirm.</li>
+        <li><b>Add/Attach Item</b>: scan a barcode the cart doesn't know. Either attach it to an existing item
+          (useful for a variety pack sold as one item) or create a new item with a name and price. An item
+          can have up to 8 barcodes.</li>
+        <li><b>Inventory</b>: the full list. Open an item to change its price or stock, link or unlink barcodes,
+          <b>hide</b> it (off Browse, and its barcode scans as unknown, but its sales history is kept), or delete it.
+          Items that have ever sold can only be hidden, not deleted.</li>
+      </ul>
+      <p>Stock goes down automatically with every sale, and can go below zero if the count was off.
+        For entering many items at once, the web portal is quicker than the buttons.</p>
+
+      <h3>Users</h3>
+      <ul>
+        <li><b>Add User</b>: scan the new person's badge, spell their name, and choose whether they're an admin.</li>
+        <li><b>Edit Users</b>: rename someone, make them an admin, or set them <b>inactive</b>. An inactive
+          person's badge is turned away at the cart, but their history is kept.</li>
+        <li><b>Auto Enroll</b>: when on, unknown badges can sign themselves up (see Buying snacks).</li>
+      </ul>
+      <div class="note"><p>You can't change your own account while you're logged in, on the cart or on the
+        web. This guarantees there's always at least one working admin. Ask another admin to make changes to
+        your account.</p></div>
+
+      <h3>Settings</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Setting</th><th>Range</th><th class="num">Default</th></tr></thead>
+        <tr><td>Payment Info: set up an account by scanning your own Venmo, Cash App, or Zelle “my QR code” (or type it). One account per method.</td><td>—</td><td class="num">—</td></tr>
+        <tr><td>Screensaver timeout</td><td>1–10 min</td><td class="num">3 min</td></tr>
+        <tr><td>Screensaver dim level</td><td>10–100%</td><td class="num">30%</td></tr>
+        <tr><td>Display brightness</td><td>10–100%</td><td class="num">100%</td></tr>
+        <tr><td>Auto logout</td><td>1–10 min</td><td class="num">5 min</td></tr>
+        <tr><td>WiFi password (web portal)</td><td>8+ characters</td><td class="num">built-in</td></tr>
+        <tr><td>Set Clock: year, month, day, hour, minute</td><td>—</td><td class="num">—</td></tr>
+      </table></div>
+      <p>The clock keeps time through power cuts on its own coin battery. It has no internet time source,
+        so correct it here if it drifts or after a daylight-saving change.</p>
+
+      <h3>Advanced Tools</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Tool</th><th>What it's for</th></tr></thead>
+        <tr><td>SD Info</td><td>Card size, space used, and a write test.</td></tr>
+        <tr><td>DB</td><td>Read-only views of the users, items, transactions, payment and settings tables; <b>Backup Now</b>; <b>Restore Backup</b>.</td></tr>
+        <tr><td>Scanner</td><td>Lock or unlock the scanner's setup-code feature, view its settings, restore its defaults.</td></tr>
+        <tr><td>DS3231 Test</td><td>The clock chip's status and time, and a full clock check.</td></tr>
+        <tr><td>Boot Log</td><td>One page per power-on, newest first. See <a href="#alerts">Alerts &amp; boot log</a>.</td></tr>
+      </table></div>
+    </section>
+
+    <!-- 05 -->
+    <section id="portal">
+      <h2><span class="num">05</span>Web portal</h2>
+      <p class="sub">A phone-friendly admin site served by the cart itself, over its own WiFi network.</p>
+      <ol class="steps">
+        <li><div>Log in as an admin and open <b>Web Portal</b>. The cart's WiFi switches on and the screen shows
+          the network name (<code>SnackCart</code>), its password, and a QR code for the page.</div></li>
+        <li><div>Join that network on your phone, then scan the QR code (or browse to the address shown).</div></li>
+        <li><div>Work in the browser. Keep the Web Portal screen open on the cart the whole time; the WiFi
+          turns off the moment you leave that screen.</div></li>
+      </ol>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Page</th><th>What's there</th></tr></thead>
+        <tr><td>Home</td><td>Outstanding balance, unpaid transactions, people and item counts.</td></tr>
+        <tr><td>Balance</td><td>Unpaid transactions grouped by person, each with a Clear button.</td></tr>
+        <tr><td>Items</td><td>Every item with price and stock, quick ±1/±10 stock buttons, Edit (name, price, hidden, delete), and Add Item.</td></tr>
+        <tr><td>Report</td><td>Lifetime and monthly sales, per person and per item. Downloads as a spreadsheet (.xlsx) or plain text, for unpaid only, the last 30 days, or lifetime.</td></tr>
+        <tr><td>Users</td><td>Admin and Active switches per person, and Edit (name, badge number, registration date, delete).</td></tr>
+        <tr><td>Admin</td><td>Cart settings, clock, WiFi password, payment accounts (view only), Back up now, <b>Download database</b>, <b>Download boot log</b>.</td></tr>
+      </table></div>
+      <div class="note"><p>The portal has no login of its own. Access is protected by needing an admin
+        badge at the cart and the WiFi password, and by the WiFi only running while that screen is open.
+        Anyone on the network while it's open can see and change everything, so close the Web Portal
+        screen when you're done.</p></div>
+    </section>
+
+    <!-- 06 -->
+    <section id="care">
+      <h2><span class="num">06</span>Care &amp; backups</h2>
+
+      <h3>How your data is protected</h3>
+      <ul>
+        <li>Every power-on checks the whole database before using it.</li>
+        <li>The cart keeps <b>five rolling backup copies</b> on the SD card, refreshed at every power-on,
+          after every sale, and when the web portal closes. Each copy is read back and compared before it
+          replaces an older one, and a damaged database is never copied over a good backup.</li>
+        <li>If the database is missing or damaged at power-on, the cart restores the newest good copy by
+          itself and shows an alert.</li>
+      </ul>
+      <div class="note warn"><p><b>All five copies are on the same SD card.</b> If the card itself dies,
+        they go with it. Every so often, use <b>Download database</b> on the web portal's Admin page to keep a
+        copy on your phone or computer.</p></div>
+
+      <h3>Removing the SD card</h3>
+      <ol class="steps">
+        <li><div>Turn the cart off with the power switch. Never pull the card while it's on.</div></li>
+        <li><div>Press the card in through the side cutout to release it.</div></li>
+        <li><div>On a computer, the card shows the database (<code>pos.db</code>), its backups, the boot log, and
+          the Slide Free puzzle files. Don't rename or delete <code>pos.db-journal</code>; the database uses it to
+          recover from power cuts.</div></li>
+      </ol>
+
+      <h3>Recovering on a new card</h3>
+      <ol class="steps">
+        <li><div>Format a card as FAT32. Testing a new card first with a free tool such as H2testw catches
+          bad or fake-capacity cards.</div></li>
+        <li><div>Copy your most recent downloaded database onto it and rename it <code>pos.db</code>. Copy the
+          <code>slidefree</code> folder too if you have it.</div></li>
+        <li><div>Insert it and power on. Everything returns as of that download.</div></li>
+      </ol>
+      <p>A completely blank card starts a <b>setup wizard</b> instead, which walks you through scanning in the
+        first admin. Items and people then have to be added again.</p>
+
+      <h3>Cleaning &amp; placement</h3>
+      <ul>
+        <li>Wipe the screen and scanner window with a soft, dry or barely damp cloth. Don't spray liquid onto the cart.</li>
+        <li>Keep the vent holes clear, and keep the cart out of direct sun.</li>
+        <li>The base is weighted so the cart doesn't tip forward; set it on a flat surface.</li>
+      </ul>
+    </section>
+
+    <!-- 07 -->
+    <section id="alerts">
+      <h2><span class="num">07</span>Alerts &amp; boot log</h2>
+      <p>Every time it powers on, the cart checks itself and writes one line to <code>boot_log.csv</code> on the
+        SD card. Problems also appear as a <b>yellow bar at the top of the Admin Menu</b>; customers never see
+        it. The bar shows the most important problem, with “(+N more)” if there are others.</p>
+      <p>To read the log, open Advanced Tools → <b>Boot Log</b> (<span class="key k-dir">&#9664;</span> older,
+        <span class="key k-dir">&#9654;</span> newer, <span class="key k-dir">&#9650;</span><span class="key k-dir">&#9660;</span>
+        scroll; failures show in red, things to act on in orange), or use <b>Download boot log</b> on the web
+        portal.</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Alert</th><th>What to do</th></tr></thead>
+        <tr><td class="alert-msg bad">NO SD CARD DETECTED</td><td>Power off, reseat the card through the side cutout, power on.</td></tr>
+        <tr><td class="alert-msg bad">DATABASE UNAVAILABLE</td><td>The database couldn't be opened or restored. Try another card with a downloaded copy (see Care &amp; backups).</td></tr>
+        <tr><td class="alert-msg">DB RESTORED FROM BACKUP THIS BOOT</td><td>The cart repaired itself. Anything since the last backup (usually only the very last sale) may be missing; check Balances.</td></tr>
+        <tr><td class="alert-msg bad">UNEXPECTED RESTART: BROWNOUT</td><td>The power dipped. Try a stronger USB adapter (2 A or more) or a different cable.</td></tr>
+        <tr><td class="alert-msg bad">UNEXPECTED RESTART: CRASH / WATCHDOG</td><td>The software stopped. Note what was happening and check the boot log; if it repeats, it needs a firmware fix.</td></tr>
+        <tr><td class="alert-msg bad">SD CARD NOT WRITABLE</td><td>Check the card's lock switch; replace the card if it persists.</td></tr>
+        <tr><td class="alert-msg">LOW SD CARD SPACE</td><td>Under 5% free. Use a larger card.</td></tr>
+        <tr><td class="alert-msg">CLOCK IS WRONG - SET CLOCK<br>CLOCK IS BEHIND LAST SALE</td><td>Settings → Set Clock.</td></tr>
+        <tr><td class="alert-msg">CLOCK BATTERY LOST POWER</td><td>Set the clock. If it keeps happening, replace the clock's CR2032 coin cell.</td></tr>
+        <tr><td class="alert-msg bad">CLOCK CHIP NOT FOUND</td><td>Hardware fault in the clock wiring. The cart still runs, but times will be wrong after every power cut.</td></tr>
+        <tr><td class="alert-msg bad">SCANNER NOT RESPONDING</td><td>Power off and on. If it persists, the scanner cable needs checking.</td></tr>
+        <tr><td class="alert-msg">SCANNER SETTINGS UNREADABLE<br>SCANNER SETTINGS DIDN'T STICK</td><td>Power off and on. If it repeats, Advanced Tools → Scanner → Restore Defaults.</td></tr>
+        <tr><td class="alert-msg">SCANNER SETUP-CODE LOCK IS OFF</td><td>Advanced Tools → Scanner → Disable QR Config Scan. This stops special setup barcodes from changing the scanner's settings.</td></tr>
+        <tr><td class="alert-msg bad">BUTTON STUCK DOWN AT BOOT</td><td>A button was held or jammed at power-on. The cart ignores it until it's released; if it's physically stuck, it needs repair.</td></tr>
+        <tr><td class="alert-msg">DATA CHECK FOUND PROBLEMS - SEE BOOT LOG</td><td>Some records don't add up (for example, a sale whose total doesn't match its items). Nothing is changed automatically; the boot log says what was found.</td></tr>
+        <tr><td class="alert-msg">SLIDE FREE BOARD FILES MISSING</td><td>Copy the <code>slidefree</code> folder back onto the card.</td></tr>
+      </table></div>
+      <p>A rising <b>SD write time</b> in the boot log over several months is an early sign of a wearing card;
+        compare power-on boots with each other (a cold power-on is normally around 250&nbsp;ms).</p>
+    </section>
+
+    <!-- 08 -->
+    <section id="trouble">
+      <h2><span class="num">08</span>Troubleshooting</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Problem</th><th>Try</th></tr></thead>
+        <tr><td>Scanning does nothing</td><td>Wake the screen first (any button); the scanner is off on the screensaver and on most menus. On the cart screen, an unknown item shows “Item not found.”</td></tr>
+        <tr><td>“Badge not recognized”</td><td>The badge isn't enrolled. Turn on Auto Enroll, or have an admin use Add User.</td></tr>
+        <tr><td>Badge turned away with “please see the cart owner”</td><td>The person is set inactive. An admin can reactivate them in Edit Users.</td></tr>
+        <tr><td>Venmo QR won't open</td><td>Use the phone's Camera app, not the scanner inside Venmo.</td></tr>
+        <tr><td>Zelle QR won't open</td><td>Use the Zelle scanner inside your bank's app, not the Camera app.</td></tr>
+        <tr><td>“Couldn't save. Press Confirm to try again.”</td><td>The SD card hiccuped. Press Confirm again; the cart is kept until it saves.</td></tr>
+        <tr><td>Can't find the SnackCart WiFi</td><td>The WiFi only runs while the Web Portal screen is open on the cart.</td></tr>
+        <tr><td>Times on transactions are wrong</td><td>Settings → Set Clock. Check the clock alerts above.</td></tr>
+        <tr><td>Screen shows an SD card error at power-on</td><td>Follow the message on screen; press <span class="key k-enter">ENTER</span> to retry after reseating the card.</td></tr>
+        <tr><td>Can't change my own account</td><td>By design. Another admin has to do it.</td></tr>
+      </table></div>
+    </section>
+
+    <!-- 09 -->
+    <section id="specs">
+      <h2><span class="num">09</span>Specifications</h2>
+
+      <h3>Hardware</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Part</th><th>Details</th></tr></thead>
+        <tr><td>Controller</td><td>ESP32-S3 (N16R8): dual-core 240&nbsp;MHz, 16&nbsp;MB flash, 8&nbsp;MB PSRAM, WiFi</td></tr>
+        <tr><td>Display</td><td>3.5&Prime; TFT, ILI9488 driver, 320&nbsp;×&nbsp;480 portrait, PWM backlight</td></tr>
+        <tr><td>Scanner</td><td>GM65 1D/2D barcode module, UART 9600 baud, built-in buzzer (2&nbsp;kHz)</td></tr>
+        <tr><td>Buttons</td><td>6 tactile switches (Up, Down, Left, Right, Enter, Back)</td></tr>
+        <tr><td>Storage</td><td>microSD, FAT32 (launch card: 16&nbsp;GB)</td></tr>
+        <tr><td>Clock</td><td>DS3231 real-time clock, CR2032 coin-cell backup</td></tr>
+        <tr><td>Power input</td><td>5&nbsp;V DC over USB (power only, no data)</td></tr>
+        <tr><td>Protection</td><td>Littelfuse RXEF250 resettable fuse (2.5&nbsp;A hold, ~5&nbsp;A trip); 470–1000&nbsp;µF bulk capacitor + 0.1&nbsp;µF ceramic on the 5&nbsp;V input</td></tr>
+        <tr><td>Enclosure</td><td>3D-printed PETG, primed and texture-painted; steel-shot and epoxy ballast in the base; vent holes; side cutout for the SD card</td></tr>
+        <tr><td>Wireless</td><td>WiFi access point only (2.4&nbsp;GHz, WPA2), on only while the Web Portal screen is open. No internet connection.</td></tr>
+      </table></div>
+
+      <h3>Estimated power draw</h3>
+      <p class="sub">Estimated from component datasheets and typical values; not yet measured on the finished cart.</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>State</th><th>What's running</th><th class="num">Current at 5&nbsp;V</th><th class="num">Power</th></tr></thead>
+        <tr><td>Screensaver</td><td>Backlight dimmed (30%), scanner off, WiFi off</td><td class="num">100–150&nbsp;mA</td><td class="num">0.5–0.75&nbsp;W</td></tr>
+        <tr><td>Waiting on Start</td><td>Full brightness, scanner watching for a badge</td><td class="num">180–260&nbsp;mA</td><td class="num">0.9–1.3&nbsp;W</td></tr>
+        <tr><td>Scanning</td><td>Scanner illuminating and decoding (brief)</td><td class="num">280–400&nbsp;mA</td><td class="num">1.4–2.0&nbsp;W</td></tr>
+        <tr><td>Web portal open</td><td>WiFi access point running, full brightness</td><td class="num">230–330&nbsp;mA avg</td><td class="num">1.2–1.7&nbsp;W</td></tr>
+        <tr><td>Worst-case peak</td><td>WiFi transmit, a scan, and an SD write at the same instant</td><td class="num">1.3–1.5&nbsp;A</td><td class="num">6.5–7.5&nbsp;W</td></tr>
+      </table></div>
+      <ul>
+        <li><b>Recommended supply:</b> a 5&nbsp;V USB wall adapter rated <b>2&nbsp;A or more</b>. Peaks last
+          milliseconds, but a weak adapter or thin cable can let the voltage dip and restart the cart (logged as
+          a brownout).</li>
+        <li><b>Daily use:</b> at roughly 1&nbsp;W average, about 24&nbsp;Wh a day, or about 0.7&nbsp;kWh a month:
+          on the order of ten cents of electricity.</li>
+        <li><b>Clock battery:</b> the DS3231 draws only microamps from its CR2032 when the cart is unplugged;
+          expect years of life.</li>
+      </ul>
+
+      <h3>Capacities</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Limit</th><th class="num">Value</th></tr></thead>
+        <tr><td>Items shown in on-cart lists</td><td class="num">255</td></tr>
+        <tr><td>Barcodes per item</td><td class="num">8</td></tr>
+        <tr><td>Different items in one transaction</td><td class="num">32</td></tr>
+        <tr><td>People shown in on-cart lists</td><td class="num">128</td></tr>
+        <tr><td>Unpaid transactions shown on the cart's Balances screen (the web shows all)</td><td class="num">64</td></tr>
+        <tr><td>Backup copies kept on the card</td><td class="num">5</td></tr>
+        <tr><td>Boot log size before it rolls over (keeps one older file)</td><td class="num">≈1,700 boots</td></tr>
+        <tr><td>Power-on to ready</td><td class="num">≈5&nbsp;s</td></tr>
+      </table></div>
+
+      <h3>Software</h3>
+      <ul>
+        <li>Arduino framework on PlatformIO, LVGL 8.4 graphics, SQLite database on the SD card.</li>
+        <li>Every library is pinned to the exact version that shipped, so rebuilding the firmware later produces
+          the same cart. Source is kept in a private GitHub repository.</li>
+        <li>Times are stored as local time with no time zone or daylight-saving adjustment.</li>
+      </ul>
+
+      <details open>
+        <summary>Pin assignments (for repairs)</summary>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Signal</th><th class="num">GPIO</th></tr></thead>
+          <tr><td>Display CS / Reset / D/C</td><td class="num">8 / 9 / 10</td></tr>
+          <tr><td>SPI MOSI / SCK / MISO (display + SD, shared bus)</td><td class="num">11 / 12 / 13</td></tr>
+          <tr><td>SD card CS</td><td class="num">14</td></tr>
+          <tr><td>Display backlight (PWM)</td><td class="num">18</td></tr>
+          <tr><td>Scanner: ESP receive ← GM65 TX / ESP transmit → GM65 RX</td><td class="num">16 / 15</td></tr>
+          <tr><td>Clock I²C SDA / SCL (4.7&nbsp;kΩ pull-ups)</td><td class="num">5 / 4</td></tr>
+          <tr><td>Buttons Up / Down / Left / Right</td><td class="num">41 / 42 / 2 / 1</td></tr>
+          <tr><td>Buttons Enter / Back</td><td class="num">40 / 39</td></tr>
+        </table></div>
+      </details>
+    </section>
+
+    <footer class="colophon">
+      Snack Cart · built by LogicishDesigns · manual for the October 2026 launch firmware.
+    </footer>
+  </main>
+</div>
