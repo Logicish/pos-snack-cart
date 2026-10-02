@@ -14,6 +14,8 @@ pics/
 
 # BUILD.md/CLAUDE.md/MIGRATION.md/snack_cart_pos.md -- narrative/status docs, not source.
 *.md
+# ...except the public README (license + project summary), 2026-10-02
+!README.md
 
 # Copyrighted manufacturer PDFs (GM65/DFR0660 manuals) + their text extracts.
 temp_resources/
